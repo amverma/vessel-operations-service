@@ -1,0 +1,215 @@
+# R1-R20 Resilience Checker Configuration v1.0
+# This file configures the behavior of the resilience guardrail checker
+# Repository: vessel-operations-service
+# GitHub: https://github.com/amverma/vessel-operations-service.git
+
+version: "1.0"
+
+# Severity threshold for blocking PRs
+# Options: CRITICAL, HIGH, MEDIUM, LOW
+# Default: CRITICAL (only critical failures block merge)
+severity_threshold: CRITICAL
+
+# Paths to monitor for changes
+monitored_paths:
+  - src/**
+  - k8s/**
+  - helm/**
+  - schemas/**
+  - infrastructure/**
+  - specs/**
+  - config/**
+  - resources/**
+
+# File extensions to check
+file_extensions:
+  - .java
+  - .kt
+  - .py
+  - .js
+  - .ts
+  - .go
+  - .yml
+  - .yaml
+  - .json
+  - .avsc
+  - .avdl
+  - .md
+  - .txt
+  - .adoc
+  - .properties
+  - .xml
+  - .gradle
+
+# Checks configuration
+checks:
+  R1:
+    enabled: true
+    severity: CRITICAL
+    name: "Circuit Breaker Pattern"
+    
+  R2:
+    enabled: true
+    severity: HIGH
+    name: "Retry with Exponential Backoff"
+    
+  R3:
+    enabled: true
+    severity: CRITICAL
+    name: "Timeout Configuration"
+    
+  R4:
+    enabled: true
+    severity: HIGH
+    name: "Bulkhead Pattern"
+    
+  R5:
+    enabled: true
+    severity: HIGH
+    name: "Rate Limiting"
+    
+  R6:
+    enabled: true
+    severity: CRITICAL
+    name: "Health Checks"
+    
+  R7:
+    enabled: true
+    severity: CRITICAL
+    name: "Graceful Shutdown"
+    
+  R8:
+    enabled: true
+    severity: CRITICAL
+    name: "Idempotency"
+    
+  R9:
+    enabled: true
+    severity: HIGH
+    name: "Dead Letter Queue (DLQ)"
+    
+  R10:
+    enabled: true
+    severity: HIGH
+    name: "Structured Logging"
+    
+  R11:
+    enabled: true
+    severity: HIGH
+    name: "Distributed Tracing"
+    
+  R12:
+    enabled: true
+    severity: CRITICAL
+    name: "Metrics and Monitoring"
+    
+  R13:
+    enabled: true
+    severity: CRITICAL
+    name: "Schema Evolution Strategy"
+    
+  R14:
+    enabled: true
+    severity: CRITICAL
+    name: "Kafka Consumer Best Practices"
+    
+  R15:
+    enabled: true
+    severity: HIGH
+    name: "Database Connection Pooling"
+    
+  R16:
+    enabled: true
+    severity: CRITICAL
+    name: "Kubernetes Resource Limits"
+    
+  R17:
+    enabled: true
+    severity: HIGH
+    name: "Horizontal Pod Autoscaling (HPA)"
+    
+  R18:
+    enabled: true
+    severity: HIGH
+    name: "Pod Disruption Budget (PDB)"
+    
+  R19:
+    enabled: true
+    severity: CRITICAL
+    name: "Secrets Management"
+    
+  R20:
+    enabled: true
+    severity: CRITICAL
+    name: "Disaster Recovery Testing"
+
+# Exclusions
+exclusions:
+  paths:
+    - "**/test/**"
+    - "**/tests/**"
+    - "**/*Test.java"
+    - "**/*Spec.java"
+    - "**/*Test.kt"
+    - "**/target/**"
+    - "**/build/**"
+    - "**/node_modules/**"
+    - "**/.gradle/**"
+  
+  files:
+    - "README.md"
+    - "LICENSE"
+    - ".gitignore"
+
+# Reporting configuration
+reporting:
+  show_passed_checks: true
+  max_findings_per_check: 10
+  generate_badge: true
+  upload_artifacts: true
+  artifact_retention_days: 30
+
+# Notification configuration
+notifications:
+  notify_on_bypass: true
+  architecture_board_team: "@architecture-board"
+  create_issue_on_bypass: true
+  stakeholder_teams:
+    - "@vessel-ops-team"
+    - "@platform-engineering"
+
+# Bypass configuration
+bypass:
+  bypass_label: "bypass-resilience-check"
+  require_adr: true
+  adr_path_pattern: "docs/adr/*.md"
+  require_arch_board_review: true
+  min_approvals_for_bypass: 2
+
+# Integration settings
+integrations:
+  github_pr_comments: true
+  github_status_checks: true
+  slack_notifications: false
+  slack_webhook_url: ""
+  email_notifications: false
+  email_recipients: []
+
+# Advanced settings
+advanced:
+  parallel_processing: true
+  max_workers: 4
+  cache_results: true
+  cache_ttl: 3600
+  verbose: false
+  debug: false
+  repository:
+    name: "vessel-operations-service"
+    owner: "amverma"
+    url: "https://github.com/amverma/vessel-operations-service.git"
+  compliance:
+    enforce_standards: true
+    require_security_scan: true
+    require_license_check: true
+
+# Made with Bob
