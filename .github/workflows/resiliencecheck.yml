@@ -43,11 +43,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: repo
 
       - name: Fetch base branch
         if: github.event_name == 'pull_request'
         run: |
-          git fetch origin ${{ github.base_ref }}
+          git -C repo fetch origin ${{ github.base_ref }}
 
       - name: Resolve refs
         id: refs
@@ -58,7 +59,7 @@ jobs:
             echo "head_ref=${{ github.head_ref }}" >> $GITHUB_OUTPUT
           else
             echo "base_ref=${{ github.event.inputs.target_branch }}" >> $GITHUB_OUTPUT
-            echo "head_ref=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
+            echo "head_ref=$(git -C repo rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
           fi
 
       - name: Set up Node
@@ -71,9 +72,9 @@ jobs:
         run: |
           mkdir -p "${ARTIFACTS_DIR}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
+            git -C repo diff --name-only "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
           else
-            git diff --name-only "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
+            git -C repo diff --name-only "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
           fi
 
           grep -E '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/|resources/|application\.ya?ml|pom\.xml|build\.gradle)' "${ARTIFACTS_DIR}/changed-files.txt" > "${ARTIFACTS_DIR}/changed-files-filtered.txt" || true
@@ -82,17 +83,17 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git diff "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
+            git -C repo diff "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
           else
-            git diff "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
+            git -C repo diff "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
           fi
 
       - name: Package PR for Llama-backed Bob
         shell: bash
         run: |
-          node .github/llama-agent/package-pr-for-bob.js \
-            --repo-root . \
-            --config "${CONFIG_FILE}" \
+          node repo/.github/llama-agent/package-pr-for-bob.js \
+            --repo-root repo \
+            --config "repo/${CONFIG_FILE}" \
             --changed-files "${ARTIFACTS_DIR}/changed-files-filtered.txt" \
             --diff-file "${ARTIFACTS_DIR}/pull-request.diff" \
             --output-dir "${ARTIFACTS_DIR}" \
@@ -104,6 +105,7 @@ jobs:
             --head-ref "${{ steps.refs.outputs.head_ref }}"
 
       - name: Call Llama agent review API
+        id: llama_api
         shell: bash
         run: |
           if [ -z "${LLAMA_AGENT_BASE_URL}" ]; then
@@ -130,19 +132,28 @@ jobs:
           }
 
           const result = await response.json();
+
+          if (!result.review_json || !result.review_markdown) {
+            throw new Error('Llama agent API response is missing review_json or review_markdown');
+          }
+
           fs.writeFileSync('.github/artifacts/bob-review.json', `${JSON.stringify(result.review_json, null, 2)}\n`, 'utf8');
           fs.writeFileSync('.github/artifacts/bob-review.md', `${result.review_markdown}\n`, 'utf8');
           EOF
 
+          test -f "${ARTIFACTS_DIR}/bob-review.json"
+          test -f "${ARTIFACTS_DIR}/bob-review.md"
+
       - name: Validate Bob result contract
+        if: success()
         shell: bash
         run: |
-          node .github/llama-agent/validate-bob-review-result.js \
+          node repo/.github/llama-agent/validate-bob-review-result.js \
             --json-result "${ARTIFACTS_DIR}/bob-review.json" \
             --markdown-result "${ARTIFACTS_DIR}/bob-review.md"
 
       - name: Post Bob PR comment
-        if: github.event_name == 'pull_request' && always()
+        if: github.event_name == 'pull_request' && success() && hashFiles('.github/artifacts/bob-review.md') != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -178,7 +189,7 @@ jobs:
             }
 
       - name: Upload Bob artifacts
-        if: always()
+        if: hashFiles('.github/artifacts/bob-pr-review-bundle.json') != ''
         uses: actions/upload-artifact@v4
         with:
           name: bob-resilience-analysis-v3
