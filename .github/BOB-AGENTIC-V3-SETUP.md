@@ -2,109 +2,246 @@
 
 ## What Changed
 
-The old rule-based workflow in [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml) has been replaced with a **Bob-first V3 workflow**.
+The old rule-based workflow in [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml) has been replaced with a **Bob-first V3 workflow** that is now adapted for a **Llama/Ollama-backed local agent API**.
 
 This means:
 
-- GitHub Actions now prepares PR context and enforces Bob’s output
-- Bob is intended to perform the actual resilience analysis
-- merge pass/fail must come from Bob’s JSON decision
-- local scripts no longer compute resilience findings for V3 enforcement
+- GitHub Actions prepares PR context and enforces the agent output
+- your local Llama model performs the actual resilience analysis through [`llama-agent/server.js`](llama-agent/server.js)
+- merge pass/fail comes from the generated JSON decision
+- local helper scripts do not compute the resilience decision themselves
 
-## Files Added for V3
+## Files Added for the Llama-backed Agent
 
 - [`../.bob/modes/resilience-guardian-v3.md`](../.bob/modes/resilience-guardian-v3.md)
 - [`../.bob/prompts/pr-review-agent-prompt.md`](../.bob/prompts/pr-review-agent-prompt.md)
 - [`../.bob/prompts/critical-escalation-prompt.md`](../.bob/prompts/critical-escalation-prompt.md)
 - [`../.bob/prompts/auto-fix-guardrails.md`](../.bob/prompts/auto-fix-guardrails.md)
 - [`bob-agentic-config.yml`](bob-agentic-config.yml)
-- [`scripts/package_pr_for_bob.py`](scripts/package_pr_for_bob.py)
-- [`scripts/validate_bob_review_result.py`](scripts/validate_bob_review_result.py)
+- [`llama-agent/package.json`](llama-agent/package.json)
+- [`llama-agent/package-pr-for-bob.js`](llama-agent/package-pr-for-bob.js)
+- [`llama-agent/review-bundle.js`](llama-agent/review-bundle.js)
+- [`llama-agent/server.js`](llama-agent/server.js)
+- [`llama-agent/validate-bob-review-result.js`](llama-agent/validate-bob-review-result.js)
 - [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml)
 
-## Important Reality
+## Runtime Assumptions
 
-This workflow is now **purely agentic in design**, but you still need a real Bob execution mechanism in CI.
+This setup assumes:
 
-The current workflow prepares:
-- `.github/artifacts/bob-pr-review-bundle.json`
+- [`Ollama`](llama-agent/review-bundle.js) is installed on your laptop
+- Node.js is installed
+- a model such as `llama3.1:8b` is available in Ollama
+- your laptop can expose an HTTP endpoint that GitHub Actions can call
 
-And expects Bob to create:
-- `.github/artifacts/bob-review.md`
-- `.github/artifacts/bob-review.json`
+## Local Agent Architecture
 
-## Where to Plug in Bob
+The flow is now:
 
-Open [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml) and find the step:
+1. GitHub Actions collects changed files and diff
+2. GitHub Actions builds `.github/artifacts/bob-pr-review-bundle.json`
+3. GitHub Actions sends that bundle to your HTTP endpoint exposed by [`llama-agent/server.js`](llama-agent/server.js)
+4. [`llama-agent/server.js`](llama-agent/server.js) invokes [`llama-agent/review-bundle.js`](llama-agent/review-bundle.js)
+5. [`llama-agent/review-bundle.js`](llama-agent/review-bundle.js) calls the local Ollama API
+6. the agent writes:
+   - `.github/artifacts/bob-review.md`
+   - `.github/artifacts/bob-review.json`
+7. GitHub Actions validates the JSON structure using [`llama-agent/validate-bob-review-result.js`](llama-agent/validate-bob-review-result.js)
+8. the PR comment is posted and merge blocking is enforced from `block_merge`
 
-- `Await Bob review output`
+## Step 1 - Ensure Ollama is Running
 
-Replace that step with your real Bob invocation.
+Test Ollama locally:
 
-## Example Integration Options
-
-### Option 1: Bob CLI
-If your runner has a Bob CLI:
-
-```bash
-bob review-pr \
-  --mode resilience-guardian-v3 \
-  --input .github/artifacts/bob-pr-review-bundle.json \
-  --markdown-output .github/artifacts/bob-review.md \
-  --json-output .github/artifacts/bob-review.json
+```powershell
+ollama --version
+ollama list
 ```
 
-### Option 2: Bob API
-If Bob is exposed as an API:
+If your model is not present, pull one:
 
-```bash
-curl -X POST https://YOUR_BOB_ENDPOINT/review \
-  -H "Authorization: Bearer $BOB_API_KEY" \
-  -H "Content-Type: application/json" \
-  --data @.github/artifacts/bob-pr-review-bundle.json
+```powershell
+ollama pull llama3.1:8b
 ```
 
-Your integration logic must write:
-- `.github/artifacts/bob-review.md`
-- `.github/artifacts/bob-review.json`
+Ollama normally serves its API at:
 
-## How to Test the New Workflow
+- `http://127.0.0.1:11434`
 
-### Test 1: Trigger the workflow
-Create a PR that changes a monitored path such as:
+## Step 2 - Start the Local Llama Agent API
+
+From the repository root [`vessel-operations-service`](../):
+
+```powershell
+cd .\vessel-operations-service
+$env:OLLAMA_MODEL="llama3.1:8b"
+$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
+$env:LLAMA_AGENT_HOST="0.0.0.0"
+$env:LLAMA_AGENT_PORT="8787"
+$env:LLAMA_AGENT_REPO_ROOT=(Get-Location).Path
+node .github/llama-agent/server.js
+```
+
+When healthy, the service exposes:
+
+- `GET /health`
+- `POST /review`
+
+Example local health check:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8787/health
+```
+
+## Step 3 - Test the Review API Locally
+
+Create a bundle locally or reuse one from workflow artifacts, then call the API.
+
+Example request body shape:
+
+```json
+{
+  "bundle": {
+    "repository": "amverma/vessel-operations-service",
+    "pull_request": {
+      "number": "123",
+      "title": "Test resilience review",
+      "author": "amverma",
+      "base_ref": "main",
+      "head_ref": "test/branch"
+    },
+    "changed_files": [
+      "src/main/java/com/freightforwarder/vesseloperations/infrastructure/kafka/KafkaEventConsumer.java"
+    ],
+    "diff": "diff content here",
+    "policy_docs": {},
+    "prompts": {
+      "main": "prompt text",
+      "critical": "critical text",
+      "autofix": "autofix text"
+    },
+    "config": {},
+    "supporting_v1": {
+      "executed": false
+    }
+  }
+}
+```
+
+Example PowerShell call:
+
+```powershell
+$body = Get-Content .github/artifacts/bob-pr-review-bundle.json -Raw
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8787/review `
+  -ContentType "application/json" `
+  -Body (@{ bundle = ($body | ConvertFrom-Json) } | ConvertTo-Json -Depth 100)
+```
+
+Expected API response fields:
+
+- `review_json`
+- `review_markdown`
+
+## Step 4 - Expose the Local API to GitHub Actions
+
+GitHub-hosted runners cannot directly call `127.0.0.1` on your laptop. You need a reachable URL.
+
+Practical options:
+
+### Option A - Use a tunnel
+Use a tunnel such as:
+
+- Cloudflare Tunnel
+- ngrok
+- Tailscale Funnel
+
+Example concept:
+
+- local agent listens on `http://0.0.0.0:8787`
+- tunnel exposes `https://your-agent.example.com`
+- GitHub Actions calls that URL
+
+### Option B - Self-hosted GitHub runner on your laptop
+Run a self-hosted runner on the same machine as Ollama and the local agent.
+
+Then the workflow can call:
+
+- `http://127.0.0.1:8787/review`
+
+This is the simplest setup for a POC.
+
+## Step 5 - Configure GitHub Secret
+
+In the GitHub repository settings for [`https://github.com/amverma/vessel-operations-service.git`](https://github.com/amverma/vessel-operations-service.git), add:
+
+- `LLAMA_AGENT_BASE_URL`
+
+Set it to one of:
+
+- `http://127.0.0.1:8787` for a self-hosted runner on your laptop
+- `https://your-public-agent-endpoint` if using a tunnel or hosted service
+
+The workflow already reads this secret in [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml).
+
+## Step 6 - How the Workflow Uses the API
+
+[`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml) now does this:
+
+1. collect changed files
+2. capture PR diff
+3. package PR context with [`llama-agent/package-pr-for-bob.js`](llama-agent/package-pr-for-bob.js)
+4. call `${LLAMA_AGENT_BASE_URL}/review`
+5. persist:
+   - `.github/artifacts/bob-review.json`
+   - `.github/artifacts/bob-review.md`
+6. validate with [`llama-agent/validate-bob-review-result.js`](llama-agent/validate-bob-review-result.js)
+7. comment on the PR
+8. pass/fail based on `block_merge`
+
+## Step 7 - Recommended POC Deployment Model
+
+For your laptop-based setup, the easiest real-time integration is:
+
+1. keep Ollama running locally
+2. run [`llama-agent/server.js`](llama-agent/server.js) locally
+3. configure a **self-hosted GitHub runner** on the same laptop
+4. set `LLAMA_AGENT_BASE_URL=http://127.0.0.1:8787`
+5. run PRs through the workflow
+
+This avoids public exposure and avoids tunnel instability.
+
+## Step 8 - Verify End-to-End
+
+### Test A - Health check
+Confirm the local service responds:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8787/health
+```
+
+### Test B - Local review generation
+Call `/review` with a sample bundle and confirm it returns:
+
+- `review_json`
+- `review_markdown`
+
+### Test C - GitHub workflow run
+Create a PR that changes a monitored file such as:
+
 - `src/**`
 - `config/**`
 - `application.yml`
 
-Example:
+Then verify in Actions artifacts:
 
-```bash
-git checkout -b test/bob-agentic-v3
-echo "// trigger bob review" >> src/main/java/com/freightforwarder/vesseloperations/VesselOperationsServiceApplication.java
-git add .
-git commit -m "test: trigger bob agentic resilience review"
-git push origin test/bob-agentic-v3
-```
-
-Then open a PR.
-
-### Test 2: Confirm bundle creation
-In GitHub Actions artifacts, verify:
 - `.github/artifacts/bob-pr-review-bundle.json`
-- `.github/artifacts/changed-files-filtered.txt`
-- `.github/artifacts/pull-request.diff`
-
-This proves GitHub Actions is only preparing context.
-
-### Test 3: Confirm Bob is the decision source
-After wiring Bob in, confirm Bob produces:
-- `.github/artifacts/bob-review.md`
 - `.github/artifacts/bob-review.json`
+- `.github/artifacts/bob-review.md`
 
-The validator in [`scripts/validate_bob_review_result.py`](scripts/validate_bob_review_result.py) will fail if those files are missing or malformed.
-
-### Test 4: PASS case
-Use a Bob JSON result like:
+### Test D - PASS case
+Confirm the agent returns:
 
 ```json
 {
@@ -117,13 +254,13 @@ Use a Bob JSON result like:
 }
 ```
 
-Expected result:
+Expected:
 - workflow passes
 - PR comment is posted
-- merge is allowed if other branch rules pass
+- merge is allowed
 
-### Test 5: FAIL case
-Use a Bob JSON result like:
+### Test E - FAIL case
+Confirm the agent returns:
 
 ```json
 {
@@ -146,35 +283,22 @@ Use a Bob JSON result like:
 }
 ```
 
-Expected result:
+Expected:
 - workflow fails
-- PR gets Bob comment
+- PR comment is posted
 - merge is blocked
 
-## How to Know It Is Truly Pure Agentic AI
+## Real-Time GitHub Integration Summary
 
-Your workflow is truly Bob-agentic when all of these are true:
+If you want this to work in real time from GitHub to your laptop-hosted Llama agent, you need:
 
-1. [`package_pr_for_bob.py`](scripts/package_pr_for_bob.py) only prepares context
-2. [`validate_bob_review_result.py`](scripts/validate_bob_review_result.py) only validates Bob output structure
-3. No local script computes resilience findings for the merge decision
-4. Bob generates the Markdown and JSON review artifacts
-5. GitHub Actions only enforces Bob’s `block_merge` field
-
-## Branch Protection
-
-After the workflow has run successfully at least once:
-
-1. Go to repository Settings → Branches
-2. Add or edit the protection rule for `main`
-3. Enable:
-   - Require a pull request before merging
-   - Require status checks to pass before merging
-4. Select the new workflow check:
-   - `Bob Agentic Resilience Review`
-5. Save the rule
+- a reachable API URL for [`llama-agent/server.js`](llama-agent/server.js)
+- either:
+  - a self-hosted GitHub runner on your laptop
+  - or a public tunnel/hosted endpoint
+- the GitHub secret `LLAMA_AGENT_BASE_URL`
+- Ollama running with the configured model
 
 ## Final Note
 
-I have configured this repository structure for the V3 Bob-first flow.
-The one remaining step is to connect the actual Bob runtime or API in the workflow step that currently waits for Bob output.
+This repository is now prepared for a Llama/Ollama-backed agentic resilience checker. The remaining operational step is to run [`llama-agent/server.js`](llama-agent/server.js) continuously and make its `/review` endpoint reachable from the GitHub Actions runner that executes [`workflows/resiliencecheck.yml`](workflows/resiliencecheck.yml).
