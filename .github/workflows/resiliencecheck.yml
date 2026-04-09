@@ -39,6 +39,12 @@ jobs:
       issues: write
 
     steps:
+      - name: Enable Git long paths on runner
+        shell: powershell
+        run: |
+          git config --system core.longpaths true
+          git config --global core.longpaths true
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -153,7 +159,7 @@ jobs:
             --markdown-result "${ARTIFACTS_DIR}/bob-review.md"
 
       - name: Post Bob PR comment
-        if: github.event_name == 'pull_request' && success() && hashFiles('.github/artifacts/bob-review.md') != ''
+        if: github.event_name == 'pull_request' && steps.llama_api.outcome == 'success' && hashFiles('.github/artifacts/bob-review.md') != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -189,7 +195,7 @@ jobs:
             }
 
       - name: Upload Bob artifacts
-        if: hashFiles('.github/artifacts/bob-pr-review-bundle.json') != ''
+        if: always() && hashFiles('.github/artifacts/bob-pr-review-bundle.json') != ''
         uses: actions/upload-artifact@v4
         with:
           name: bob-resilience-analysis-v3
