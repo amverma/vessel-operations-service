@@ -31,7 +31,7 @@ env:
 
 jobs:
   bob-agentic-review:
-    name: Bob Agentic Resilience Review
+    name: Bob Agentic Resilience Review  
     runs-on: [self-hosted, windows, llama]
     permissions:
       contents: read
