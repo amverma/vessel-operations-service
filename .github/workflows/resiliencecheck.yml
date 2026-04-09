@@ -42,7 +42,6 @@ jobs:
       - name: Enable Git long paths on runner
         shell: powershell
         run: |
-          git config --system core.longpaths true
           git config --global core.longpaths true
 
       - name: Checkout repository
@@ -75,10 +74,11 @@ jobs:
             "head_ref=$headRef" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
+      - name: Verify local Node runtime
+        shell: powershell
+        run: |
+          node --version
+          npm --version
 
       - name: Collect changed files
         shell: powershell
