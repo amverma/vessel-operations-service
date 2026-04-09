@@ -31,7 +31,7 @@ env:
 
 jobs:
   bob-agentic-review:
-    name: Bob Agentic Resilience Review  
+    name: Bob Agentic Resilience Review
     runs-on: [self-hosted, windows, llama]
     permissions:
       contents: read
@@ -53,20 +53,22 @@ jobs:
 
       - name: Fetch base branch
         if: github.event_name == 'pull_request'
+        shell: powershell
         run: |
           git -C repo fetch origin ${{ github.base_ref }}
 
       - name: Resolve refs
         id: refs
-        shell: bash
+        shell: powershell
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "base_ref=${{ github.base_ref }}" >> $GITHUB_OUTPUT
-            echo "head_ref=${{ github.head_ref }}" >> $GITHUB_OUTPUT
-          else
-            echo "base_ref=${{ github.event.inputs.target_branch }}" >> $GITHUB_OUTPUT
-            echo "head_ref=$(git -C repo rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
-          fi
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            "base_ref=${{ github.base_ref }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "head_ref=${{ github.head_ref }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+            "base_ref=${{ github.event.inputs.target_branch }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            $headRef = git -C repo rev-parse --abbrev-ref HEAD
+            "head_ref=$headRef" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -74,52 +76,65 @@ jobs:
           node-version: '24'
 
       - name: Collect changed files
-        shell: bash
+        shell: powershell
         run: |
-          mkdir -p "${ARTIFACTS_DIR}"
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git -C repo diff --name-only "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
-          else
-            git -C repo diff --name-only "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/changed-files.txt"
-          fi
+          New-Item -ItemType Directory -Force -Path $env:ARTIFACTS_DIR | Out-Null
 
-          grep -E '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/|resources/|application\.ya?ml|pom\.xml|build\.gradle)' "${ARTIFACTS_DIR}/changed-files.txt" > "${ARTIFACTS_DIR}/changed-files-filtered.txt" || true
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $diffTarget = "origin/${{ github.base_ref }}...HEAD"
+          } else {
+            $diffTarget = "HEAD~1...HEAD"
+          }
+
+          $changedFiles = git -C repo diff --name-only $diffTarget
+          $changedFiles | Out-File -FilePath "$env:ARTIFACTS_DIR/changed-files.txt" -Encoding utf8
+
+          $pattern = '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/|resources/|application\.ya?ml|pom\.xml|build\.gradle)'
+          $filtered = $changedFiles | Where-Object { $_ -match $pattern }
+
+          if ($filtered) {
+            $filtered | Out-File -FilePath "$env:ARTIFACTS_DIR/changed-files-filtered.txt" -Encoding utf8
+          } else {
+            New-Item -ItemType File -Force -Path "$env:ARTIFACTS_DIR/changed-files-filtered.txt" | Out-Null
+          }
 
       - name: Capture PR diff
-        shell: bash
+        shell: powershell
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git -C repo diff "origin/${{ github.base_ref }}...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
-          else
-            git -C repo diff "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
-          fi
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $diffTarget = "origin/${{ github.base_ref }}...HEAD"
+          } else {
+            $diffTarget = "HEAD~1...HEAD"
+          }
+
+          git -C repo diff $diffTarget | Out-File -FilePath "$env:ARTIFACTS_DIR/pull-request.diff" -Encoding utf8
 
       - name: Package PR for Llama-backed Bob
-        shell: bash
+        id: package_bundle
+        shell: powershell
         run: |
-          node repo/.github/llama-agent/package-pr-for-bob.js \
-            --repo-root repo \
-            --config "repo/${CONFIG_FILE}" \
-            --changed-files "${ARTIFACTS_DIR}/changed-files-filtered.txt" \
-            --diff-file "${ARTIFACTS_DIR}/pull-request.diff" \
-            --output-dir "${ARTIFACTS_DIR}" \
-            --repository "${{ github.repository }}" \
-            --pr-number "${{ github.event.pull_request.number || '' }}" \
-            --pr-title "${{ github.event.pull_request.title || github.workflow }}" \
-            --pr-author "${{ github.event.pull_request.user.login || github.actor }}" \
-            --base-ref "${{ steps.refs.outputs.base_ref }}" \
+          node repo/.github/llama-agent/package-pr-for-bob.js `
+            --repo-root repo `
+            --config "repo/$env:CONFIG_FILE" `
+            --changed-files "$env:ARTIFACTS_DIR/changed-files-filtered.txt" `
+            --diff-file "$env:ARTIFACTS_DIR/pull-request.diff" `
+            --output-dir "$env:ARTIFACTS_DIR" `
+            --repository "${{ github.repository }}" `
+            --pr-number "${{ github.event.pull_request.number || '' }}" `
+            --pr-title "${{ github.event.pull_request.title || github.workflow }}" `
+            --pr-author "${{ github.event.pull_request.user.login || github.actor }}" `
+            --base-ref "${{ steps.refs.outputs.base_ref }}" `
             --head-ref "${{ steps.refs.outputs.head_ref }}"
 
       - name: Call Llama agent review API
         id: llama_api
-        shell: bash
+        shell: powershell
         run: |
-          if [ -z "${LLAMA_AGENT_BASE_URL}" ]; then
-            echo "Missing required secret: LLAMA_AGENT_BASE_URL"
-            exit 1
-          fi
+          if ([string]::IsNullOrWhiteSpace($env:LLAMA_AGENT_BASE_URL)) {
+            throw "Missing required secret: LLAMA_AGENT_BASE_URL"
+          }
 
-          node --input-type=module - <<'EOF'
+          $script = @'
           import fs from 'node:fs';
 
           const baseUrl = process.env.LLAMA_AGENT_BASE_URL;
@@ -145,27 +160,53 @@ jobs:
 
           fs.writeFileSync('.github/artifacts/bob-review.json', `${JSON.stringify(result.review_json, null, 2)}\n`, 'utf8');
           fs.writeFileSync('.github/artifacts/bob-review.md', `${result.review_markdown}\n`, 'utf8');
-          EOF
+          '@
 
-          test -f "${ARTIFACTS_DIR}/bob-review.json"
-          test -f "${ARTIFACTS_DIR}/bob-review.md"
+          $tempScript = Join-Path $env:RUNNER_TEMP 'call-llama-review.mjs'
+          $script | Out-File -FilePath $tempScript -Encoding utf8
+          node $tempScript
+
+      - name: Verify review artifacts exist
+        id: review_artifacts
+        if: steps.llama_api.outcome == 'success'
+        shell: powershell
+        run: |
+          $jsonPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.json'
+          $markdownPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.md'
+
+          if (-not (Test-Path $jsonPath)) {
+            throw "Missing Bob JSON result at $jsonPath"
+          }
+
+          if (-not (Test-Path $markdownPath)) {
+            throw "Missing Bob Markdown review at $markdownPath"
+          }
+
+          "review_artifacts_ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Validate Bob result contract
-        if: success()
-        shell: bash
+        if: steps.review_artifacts.outcome == 'success'
+        shell: powershell
         run: |
-          node repo/.github/llama-agent/validate-bob-review-result.js \
-            --json-result "${ARTIFACTS_DIR}/bob-review.json" \
-            --markdown-result "${ARTIFACTS_DIR}/bob-review.md"
+          node repo/.github/llama-agent/validate-bob-review-result.js `
+            --json-result "$env:ARTIFACTS_DIR/bob-review.json" `
+            --markdown-result "$env:ARTIFACTS_DIR/bob-review.md"
 
       - name: Post Bob PR comment
-        if: github.event_name == 'pull_request' && steps.llama_api.outcome == 'success' && hashFiles('.github/artifacts/bob-review.md') != ''
+        if: github.event_name == 'pull_request' && steps.llama_api.outcome == 'success' && steps.review_artifacts.outputs.review_artifacts_ready == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('.github/artifacts/bob-review.md', 'utf8');
+            const markdownPath = '.github/artifacts/bob-review.md';
+
+            if (!fs.existsSync(markdownPath)) {
+              core.info(`Skipping PR comment because ${markdownPath} does not exist.`);
+              return;
+            }
+
+            const body = fs.readFileSync(markdownPath, 'utf8');
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -195,7 +236,7 @@ jobs:
             }
 
       - name: Upload Bob artifacts
-        if: always() && hashFiles('.github/artifacts/bob-pr-review-bundle.json') != ''
+        if: always() && steps.package_bundle.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: bob-resilience-analysis-v3
