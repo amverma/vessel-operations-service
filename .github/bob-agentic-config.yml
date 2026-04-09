@@ -1,0 +1,71 @@
+version: "3.0"
+
+execution:
+  review_engine: bob_agentic_ai
+  local_rule_engine: disabled_for_decision
+  github_actions_role: trigger_transport_and_enforcement
+  merge_decision_source: bob_json_output
+
+github:
+  workflow_name: "Bob Fully Agentic Resilience Checker v3.0"
+  comment_header: "🛡️ Bob Resilience Guardian Analysis v3.0"
+  upload_artifacts: true
+  update_existing_comment: true
+  artifact_retention_days: 30
+
+inputs:
+  monitored_paths:
+    - src/**
+    - k8s/**
+    - helm/**
+    - schemas/**
+    - infrastructure/**
+    - specs/**
+    - config/**
+    - resources/**
+  include_extensions:
+    - .java
+    - .kt
+    - .py
+    - .js
+    - .ts
+    - .go
+    - .yml
+    - .yaml
+    - .json
+    - .avsc
+    - .avdl
+    - .md
+    - .txt
+    - .adoc
+    - .properties
+    - .xml
+    - .gradle
+  include_v1_as_supporting_context: true
+  max_diff_chars: 150000
+
+bob:
+  mode_slug: resilience-guardian-v3
+  prompt_main: ../.bob/prompts/pr-review-agent-prompt.md
+  prompt_critical: ../.bob/prompts/critical-escalation-prompt.md
+  prompt_autofix: ../.bob/prompts/auto-fix-guardrails.md
+  expected_markdown_output: artifacts/bob-review.md
+  expected_json_output: artifacts/bob-review.json
+
+decision:
+  block_on_severity:
+    - CRITICAL
+  require_explicit_block_merge_field: true
+  confidence_floor_for_blocking: Medium
+
+verification:
+  require_pr_comment: true
+  require_json_artifact: true
+  require_markdown_artifact: true
+  verify_existing_comment_update: true
+
+rollout:
+  replace_existing_v1_workflow: true
+  keep_v1_script_only_as_optional_supporting_context: true
+
+# Made with Bob
