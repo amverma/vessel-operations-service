@@ -52,6 +52,13 @@ bob:
   expected_markdown_output: artifacts/bob-review.md
   expected_json_output: artifacts/bob-review.json
 
+llama_agent:
+  runtime: ollama
+  base_url: http://127.0.0.1:8787
+  review_endpoint: /review
+  health_endpoint: /health
+  model: llama3.1:8b
+
 decision:
   block_on_severity:
     - CRITICAL

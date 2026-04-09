@@ -24,9 +24,10 @@ on:
         default: ''
 
 env:
-  PYTHON_VERSION: '3.11'
   ARTIFACTS_DIR: '.github/artifacts'
   CONFIG_FILE: '.github/bob-agentic-config.yml'
+  LLAMA_AGENT_BASE_URL: ${{ secrets.LLAMA_AGENT_BASE_URL }}
+  LLAMA_AGENT_REVIEW_ENDPOINT: '/review'
 
 jobs:
   bob-agentic-review:
@@ -60,16 +61,10 @@ jobs:
             echo "head_ref=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
           fi
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml requests jinja2 gitpython
+          node-version: '24'
 
       - name: Collect changed files
         shell: bash
@@ -92,10 +87,10 @@ jobs:
             git diff "HEAD~1...HEAD" > "${ARTIFACTS_DIR}/pull-request.diff"
           fi
 
-      - name: Package PR for Bob
+      - name: Package PR for Llama-backed Bob
         shell: bash
         run: |
-          python .github/scripts/package_pr_for_bob.py \
+          node .github/llama-agent/package-pr-for-bob.js \
             --repo-root . \
             --config "${CONFIG_FILE}" \
             --changed-files "${ARTIFACTS_DIR}/changed-files-filtered.txt" \
@@ -108,21 +103,41 @@ jobs:
             --base-ref "${{ steps.refs.outputs.base_ref }}" \
             --head-ref "${{ steps.refs.outputs.head_ref }}"
 
-      - name: Await Bob review output
+      - name: Call Llama agent review API
         shell: bash
         run: |
-          echo "Bob review bundle prepared at ${ARTIFACTS_DIR}/bob-pr-review-bundle.json"
-          echo "This workflow expects Bob to generate:"
-          echo "  - ${ARTIFACTS_DIR}/bob-review.md"
-          echo "  - ${ARTIFACTS_DIR}/bob-review.json"
-          echo ""
-          echo "Replace this step with your Bob CLI or Bob API invocation."
-          echo "The merge decision is not computed locally."
+          if [ -z "${LLAMA_AGENT_BASE_URL}" ]; then
+            echo "Missing required secret: LLAMA_AGENT_BASE_URL"
+            exit 1
+          fi
+
+          node --input-type=module - <<'EOF'
+          import fs from 'node:fs';
+
+          const baseUrl = process.env.LLAMA_AGENT_BASE_URL;
+          const endpoint = process.env.LLAMA_AGENT_REVIEW_ENDPOINT || '/review';
+          const bundle = JSON.parse(fs.readFileSync('.github/artifacts/bob-pr-review-bundle.json', 'utf8'));
+
+          const response = await fetch(`${baseUrl}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bundle })
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Llama agent API failed: ${response.status} ${response.statusText}\n${text}`);
+          }
+
+          const result = await response.json();
+          fs.writeFileSync('.github/artifacts/bob-review.json', `${JSON.stringify(result.review_json, null, 2)}\n`, 'utf8');
+          fs.writeFileSync('.github/artifacts/bob-review.md', `${result.review_markdown}\n`, 'utf8');
+          EOF
 
       - name: Validate Bob result contract
         shell: bash
         run: |
-          python .github/scripts/validate_bob_review_result.py \
+          node .github/llama-agent/validate-bob-review-result.js \
             --json-result "${ARTIFACTS_DIR}/bob-review.json" \
             --markdown-result "${ARTIFACTS_DIR}/bob-review.md"
 
@@ -171,7 +186,6 @@ jobs:
             .github/artifacts/bob-pr-review-bundle.json
             .github/artifacts/bob-review.md
             .github/artifacts/bob-review.json
-            .github/artifacts/v1-supporting-report.json
             .github/artifacts/changed-files-filtered.txt
             .github/artifacts/pull-request.diff
           retention-days: 30
