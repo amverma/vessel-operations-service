@@ -162,14 +162,41 @@ jobs:
         shell: powershell
         run: |
           $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
-          $submitUrl = "$baseUrl/review-file"
           $bundlePath = Resolve-Path (Join-Path $env:ARTIFACTS_DIR 'bob-pr-review-bundle.json')
-          $payload = @{ bundle_file = [string]$bundlePath } | ConvertTo-Json
+          $bundleJson = Get-Content -Raw -Path $bundlePath
+          $response = $null
+          $submitUrl = "$baseUrl/review-file"
 
           try {
+            $payload = @{ bundle_file = [string]$bundlePath } | ConvertTo-Json
             $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 30
           } catch {
-            throw "Failed to submit review job to $submitUrl within 30 seconds. $($_.Exception.Message)"
+            $statusCode = $null
+            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+              $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+
+            if ($statusCode -eq 404) {
+              $submitUrl = "$baseUrl$($env:LLAMA_AGENT_REVIEW_ENDPOINT)"
+              $legacyPayload = "{`"bundle`":$bundleJson}"
+
+              try {
+                $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $legacyPayload -TimeoutSec 30
+              } catch {
+                throw "Failed to submit review job using fallback endpoint $submitUrl within 30 seconds. $($_.Exception.Message)"
+              }
+            } elseif ($statusCode -eq 500) {
+              $submitUrl = "$baseUrl$($env:LLAMA_AGENT_REVIEW_ENDPOINT)"
+              $legacyPayload = "{`"bundle`":$bundleJson}"
+
+              try {
+                $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $legacyPayload -TimeoutSec 30
+              } catch {
+                throw "Failed to submit review job after retrying legacy endpoint $submitUrl for file-based server error. $($_.Exception.Message)"
+              }
+            } else {
+              throw "Failed to submit review job to $submitUrl within 30 seconds. $($_.Exception.Message)"
+            }
           }
 
           if (-not $response.job_id) {
