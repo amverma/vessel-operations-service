@@ -40,9 +40,9 @@ function parseArgs(argv) {
 }
 
 function buildPrompt(bundle) {
-  const changedFiles = (bundle.changed_files || []).slice(0, 200).join('\n');
+  const changedFiles = (bundle.changed_files || []).slice(0, 50).join('\n');
   const policyDocs = Object.entries(bundle.policy_docs || {})
-    .map(([name, content]) => `## Document: ${name}\n${String(content).slice(0, 12000)}`)
+    .map(([name, content]) => `## Document: ${name}\n${String(content).slice(0, 4000)}`)
     .join('\n\n');
 
   const promptSections = [
@@ -82,7 +82,7 @@ function buildPrompt(bundle) {
     'Changed Files:',
     changedFiles || '(none)',
     'Diff:',
-    String(bundle.diff || '').slice(0, 80000),
+    String(bundle.diff || '').slice(0, 20000),
     'Main Prompt:',
     bundle.prompts?.main || '',
     'Critical Prompt:',
