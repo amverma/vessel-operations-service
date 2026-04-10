@@ -17,6 +17,13 @@ function sendJson(response, statusCode, body) {
   response.end(`${JSON.stringify(body, null, 2)}\n`);
 }
 
+function sendError(response, statusCode, error, details = {}) {
+  sendJson(response, statusCode, {
+    error,
+    ...details
+  });
+}
+
 function collectRequestBody(request) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -303,47 +310,74 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/review') {
       const rawBody = await collectRequestBody(request);
-      const payload = rawBody ? JSON.parse(rawBody) : {};
+      let payload = {};
 
-      if (!payload.bundle || typeof payload.bundle !== 'object') {
-        sendJson(response, 400, {
-          error: 'Missing required object field: bundle'
+      try {
+        payload = rawBody ? JSON.parse(rawBody) : {};
+      } catch (error) {
+        sendError(response, 400, 'Invalid JSON payload', {
+          details: error.message
         });
         return;
       }
 
-      const job = createJobFromBundle(payload.bundle);
+      if (!payload.bundle || typeof payload.bundle !== 'object') {
+        sendError(response, 400, 'Missing required object field: bundle');
+        return;
+      }
 
-      sendJson(response, 202, {
-        status: 'accepted',
-        job_id: job.id,
-        poll_url: `/review/${job.id}`,
-        files: job.files,
-        queue_position: pendingQueue.indexOf(job.id) + 1
-      });
+      try {
+        const job = createJobFromBundle(payload.bundle);
+
+        sendJson(response, 202, {
+          status: 'accepted',
+          job_id: job.id,
+          poll_url: `/review/${job.id}`,
+          files: job.files,
+          queue_position: pendingQueue.indexOf(job.id) + 1
+        });
+      } catch (error) {
+        sendError(response, 500, 'Failed to create review job from inline bundle', {
+          details: error.message
+        });
+      }
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/review-file') {
       const rawBody = await collectRequestBody(request);
-      const payload = rawBody ? JSON.parse(rawBody) : {};
+      let payload = {};
 
-      if (!payload.bundle_file || typeof payload.bundle_file !== 'string') {
-        sendJson(response, 400, {
-          error: 'Missing required string field: bundle_file'
+      try {
+        payload = rawBody ? JSON.parse(rawBody) : {};
+      } catch (error) {
+        sendError(response, 400, 'Invalid JSON payload', {
+          details: error.message
         });
         return;
       }
 
-      const job = createJobFromBundleFile(payload.bundle_file);
+      if (!payload.bundle_file || typeof payload.bundle_file !== 'string') {
+        sendError(response, 400, 'Missing required string field: bundle_file');
+        return;
+      }
 
-      sendJson(response, 202, {
-        status: 'accepted',
-        job_id: job.id,
-        poll_url: `/review/${job.id}`,
-        files: job.files,
-        queue_position: pendingQueue.indexOf(job.id) + 1
-      });
+      try {
+        const job = createJobFromBundleFile(payload.bundle_file);
+
+        sendJson(response, 202, {
+          status: 'accepted',
+          job_id: job.id,
+          poll_url: `/review/${job.id}`,
+          files: job.files,
+          queue_position: pendingQueue.indexOf(job.id) + 1
+        });
+      } catch (error) {
+        sendError(response, 500, 'Failed to create review job from bundle file', {
+          details: error.message,
+          bundle_file: payload.bundle_file
+        });
+      }
       return;
     }
 
