@@ -7,7 +7,10 @@ import { spawn } from 'node:child_process';
 const PORT = Number(process.env.LLAMA_AGENT_PORT || 8787);
 const HOST = process.env.LLAMA_AGENT_HOST || '127.0.0.1';
 const REPO_ROOT = process.env.LLAMA_AGENT_REPO_ROOT || process.cwd();
+const JOBS_ROOT = path.join(REPO_ROOT, '.github', 'artifacts', 'jobs');
 const jobs = new Map();
+const pendingQueue = [];
+let activeJobId = null;
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { 'Content-Type': 'application/json' });
@@ -25,9 +28,34 @@ function collectRequestBody(request) {
   });
 }
 
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeJson(filePath, data) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+function readJsonIfExists(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function getJobDir(jobId) {
+  return path.join(JOBS_ROOT, jobId);
+}
+
+function getJobMetaPath(jobId) {
+  return path.join(getJobDir(jobId), 'job.json');
+}
+
 function writeBundleArtifacts(rootDir, bundle, jobId) {
   const artifactsDir = path.join(rootDir, '.github', 'artifacts', 'jobs', jobId);
-  fs.mkdirSync(artifactsDir, { recursive: true });
+  ensureDir(artifactsDir);
 
   const bundlePath = path.join(artifactsDir, 'bob-pr-review-bundle.json');
   const markdownPath = path.join(artifactsDir, 'bob-review.md');
@@ -40,11 +68,67 @@ function writeBundleArtifacts(rootDir, bundle, jobId) {
 
 function mirrorJobArtifactsToDefaultPaths(rootDir, artifactPaths) {
   const defaultArtifactsDir = path.join(rootDir, '.github', 'artifacts');
-  fs.mkdirSync(defaultArtifactsDir, { recursive: true });
+  ensureDir(defaultArtifactsDir);
 
   fs.copyFileSync(artifactPaths.bundlePath, path.join(defaultArtifactsDir, 'bob-pr-review-bundle.json'));
-  fs.copyFileSync(artifactPaths.jsonPath, path.join(defaultArtifactsDir, 'bob-review.json'));
-  fs.copyFileSync(artifactPaths.markdownPath, path.join(defaultArtifactsDir, 'bob-review.md'));
+
+  if (fs.existsSync(artifactPaths.jsonPath)) {
+    fs.copyFileSync(artifactPaths.jsonPath, path.join(defaultArtifactsDir, 'bob-review.json'));
+  }
+
+  if (fs.existsSync(artifactPaths.markdownPath)) {
+    fs.copyFileSync(artifactPaths.markdownPath, path.join(defaultArtifactsDir, 'bob-review.md'));
+  }
+}
+
+function getJobResponse(job) {
+  return {
+    job_id: job.id,
+    status: job.status,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+    files: job.files,
+    queue_position: job.status === 'queued' ? pendingQueue.indexOf(job.id) + 1 : 0,
+    review_json: job.status === 'completed' ? job.review_json : undefined,
+    review_markdown: job.status === 'completed' ? job.review_markdown : undefined,
+    error: job.status === 'failed' ? job.error : undefined
+  };
+}
+
+function persistJob(job) {
+  writeJson(getJobMetaPath(job.id), getJobResponse(job));
+}
+
+function hydrateJobsFromDisk() {
+  ensureDir(JOBS_ROOT);
+  const entries = fs.readdirSync(JOBS_ROOT, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const jobPath = getJobMetaPath(entry.name);
+    const saved = readJsonIfExists(jobPath);
+    if (!saved || !saved.job_id) {
+      continue;
+    }
+
+    jobs.set(saved.job_id, {
+      id: saved.job_id,
+      status: saved.status || 'failed',
+      created_at: saved.created_at || new Date().toISOString(),
+      updated_at: saved.updated_at || new Date().toISOString(),
+      files: saved.files || {
+        bundle: path.join(getJobDir(saved.job_id), 'bob-pr-review-bundle.json'),
+        json: path.join(getJobDir(saved.job_id), 'bob-review.json'),
+        markdown: path.join(getJobDir(saved.job_id), 'bob-review.md')
+      },
+      review_json: saved.review_json || null,
+      review_markdown: saved.review_markdown || null,
+      error: saved.error || null
+    });
+  }
 }
 
 function runReviewer(rootDir, artifactPaths) {
@@ -104,6 +188,43 @@ function runReviewer(rootDir, artifactPaths) {
   });
 }
 
+async function processNextJob() {
+  if (activeJobId || pendingQueue.length === 0) {
+    return;
+  }
+
+  const jobId = pendingQueue.shift();
+  const job = jobs.get(jobId);
+  if (!job) {
+    setImmediate(processNextJob);
+    return;
+  }
+
+  activeJobId = jobId;
+  job.status = 'running';
+  job.updated_at = new Date().toISOString();
+  persistJob(job);
+
+  try {
+    const result = await runReviewer(REPO_ROOT, job.files);
+    mirrorJobArtifactsToDefaultPaths(REPO_ROOT, job.files);
+    job.status = 'completed';
+    job.updated_at = new Date().toISOString();
+    job.review_json = result.reviewJson;
+    job.review_markdown = result.reviewMarkdown;
+    job.files = result.files;
+    persistJob(job);
+  } catch (error) {
+    job.status = 'failed';
+    job.updated_at = new Date().toISOString();
+    job.error = error.message || 'Unexpected reviewer failure';
+    persistJob(job);
+  } finally {
+    activeJobId = null;
+    setImmediate(processNextJob);
+  }
+}
+
 function createJob(bundle) {
   const jobId = crypto.randomUUID();
   const artifactPaths = writeBundleArtifacts(REPO_ROOT, bundle, jobId);
@@ -124,37 +245,14 @@ function createJob(bundle) {
   };
 
   jobs.set(jobId, job);
-
-  runReviewer(REPO_ROOT, artifactPaths)
-    .then((result) => {
-      mirrorJobArtifactsToDefaultPaths(REPO_ROOT, artifactPaths);
-      job.status = 'completed';
-      job.updated_at = new Date().toISOString();
-      job.review_json = result.reviewJson;
-      job.review_markdown = result.reviewMarkdown;
-      job.files = result.files;
-    })
-    .catch((error) => {
-      job.status = 'failed';
-      job.updated_at = new Date().toISOString();
-      job.error = error.message || 'Unexpected reviewer failure';
-    });
+  persistJob(job);
+  pendingQueue.push(jobId);
+  setImmediate(processNextJob);
 
   return job;
 }
 
-function getJobResponse(job) {
-  return {
-    job_id: job.id,
-    status: job.status,
-    created_at: job.created_at,
-    updated_at: job.updated_at,
-    files: job.files,
-    review_json: job.status === 'completed' ? job.review_json : undefined,
-    review_markdown: job.status === 'completed' ? job.review_markdown : undefined,
-    error: job.status === 'failed' ? job.error : undefined
-  };
-}
+hydrateJobsFromDisk();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -165,7 +263,9 @@ const server = http.createServer(async (request, response) => {
         status: 'ok',
         service: 'llama-resilience-agent',
         host: HOST,
-        port: PORT
+        port: PORT,
+        active_job_id: activeJobId,
+        queued_jobs: pendingQueue.length
       });
       return;
     }
@@ -187,7 +287,8 @@ const server = http.createServer(async (request, response) => {
         status: 'accepted',
         job_id: job.id,
         poll_url: `/review/${job.id}`,
-        files: job.files
+        files: job.files,
+        queue_position: pendingQueue.indexOf(job.id) + 1
       });
       return;
     }
@@ -217,12 +318,17 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
+server.headersTimeout = 60_000;
+server.requestTimeout = 60_000;
+server.keepAliveTimeout = 5_000;
+
 server.listen(PORT, HOST, () => {
   process.stdout.write(
     `${JSON.stringify({
       service: 'llama-resilience-agent',
       url: `http://${HOST}:${PORT}`,
-      repo_root: REPO_ROOT
+      repo_root: REPO_ROOT,
+      jobs_root: JOBS_ROOT
     }, null, 2)}\n`
   );
 });

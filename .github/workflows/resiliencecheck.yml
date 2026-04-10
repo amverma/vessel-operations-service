@@ -28,6 +28,7 @@ env:
   CONFIG_FILE: '.github/bob-agentic-config.yml'
   LLAMA_AGENT_BASE_URL: ${{ secrets.LLAMA_AGENT_BASE_URL }}
   LLAMA_AGENT_REVIEW_ENDPOINT: '/review'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   bob-agentic-review:
@@ -79,6 +80,25 @@ jobs:
         run: |
           node --version
           npm --version
+
+      - name: Check Llama agent health
+        id: llama_health
+        shell: powershell
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:LLAMA_AGENT_BASE_URL)) {
+            throw "Missing required secret: LLAMA_AGENT_BASE_URL"
+          }
+
+          $healthUrl = "$($env:LLAMA_AGENT_BASE_URL.TrimEnd('/'))/health"
+          try {
+            $health = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 15
+            if ($health.status -ne 'ok') {
+              throw "Health endpoint returned unexpected status: $($health.status)"
+            }
+            "healthy=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } catch {
+            throw "Unable to reach local Llama agent health endpoint at $healthUrl. $($_.Exception.Message)"
+          }
 
       - name: Collect changed files
         id: changed_files
@@ -136,78 +156,86 @@ jobs:
             --base-ref "${{ steps.refs.outputs.base_ref }}" `
             --head-ref "${{ steps.refs.outputs.head_ref }}"
 
-      - name: Call Llama agent review API
-        id: llama_api
-        if: steps.changed_files.outputs.has_relevant_changes == 'true'
+      - name: Submit Llama review job
+        id: submit_review
+        if: steps.changed_files.outputs.has_relevant_changes == 'true' && steps.llama_health.outputs.healthy == 'true'
         shell: powershell
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:LLAMA_AGENT_BASE_URL)) {
-            throw "Missing required secret: LLAMA_AGENT_BASE_URL"
+          $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
+          $endpoint = $env:LLAMA_AGENT_REVIEW_ENDPOINT
+          $submitUrl = "$baseUrl$endpoint"
+          $bundlePath = Join-Path $env:ARTIFACTS_DIR 'bob-pr-review-bundle.json'
+          $payload = @{
+            bundle = Get-Content -Raw -Path $bundlePath | ConvertFrom-Json -Depth 100
+          } | ConvertTo-Json -Depth 100
+
+          try {
+            $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 30
+          } catch {
+            throw "Failed to submit review job to $submitUrl within 30 seconds. $($_.Exception.Message)"
           }
 
-          $script = @'
-          import fs from 'node:fs';
-
-          const baseUrl = process.env.LLAMA_AGENT_BASE_URL;
-          const endpoint = process.env.LLAMA_AGENT_REVIEW_ENDPOINT || '/review';
-          const bundle = JSON.parse(fs.readFileSync('.github/artifacts/bob-pr-review-bundle.json', 'utf8'));
-
-          const submitResponse = await fetch(`${baseUrl}${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bundle })
-          });
-
-          if (!submitResponse.ok) {
-            const text = await submitResponse.text();
-            throw new Error(`Llama agent API failed to accept review: ${submitResponse.status} ${submitResponse.statusText}\n${text}`);
+          if (-not $response.job_id) {
+            throw "Llama agent submit response is missing job_id"
           }
 
-          const accepted = await submitResponse.json();
-          if (!accepted.job_id) {
-            throw new Error('Llama agent API response is missing job_id');
+          "job_id=$($response.job_id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if ($response.poll_url) {
+            "poll_url=$($response.poll_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+            "poll_url=/review/$($response.job_id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
 
-          const pollUrl = `${baseUrl}${accepted.poll_url || `/review/${accepted.job_id}`}`;
-          const deadline = Date.now() + (15 * 60 * 1000);
-          let lastPayload = null;
+      - name: Poll Llama review job
+        id: llama_api
+        if: steps.changed_files.outputs.has_relevant_changes == 'true' && steps.submit_review.outcome == 'success'
+        shell: powershell
+        run: |
+          $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
+          $pollPath = "${{ steps.submit_review.outputs.poll_url }}"
+          $pollUrl = "$baseUrl$pollPath"
+          $reviewJsonPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.json'
+          $reviewMarkdownPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.md'
+          $statusPath = Join-Path $env:ARTIFACTS_DIR 'llama-job-status.json'
 
-          while (Date.now() < deadline) {
-            const statusResponse = await fetch(pollUrl, {
-              method: 'GET',
-              headers: { 'Content-Type': 'application/json' }
-            });
+          $deadline = (Get-Date).AddMinutes(30)
+          $lastStatus = 'unknown'
+          $attempt = 0
 
-            if (!statusResponse.ok) {
-              const text = await statusResponse.text();
-              throw new Error(`Llama agent API polling failed: ${statusResponse.status} ${statusResponse.statusText}\n${text}`);
+          while ((Get-Date) -lt $deadline) {
+            $attempt += 1
+            try {
+              $status = Invoke-RestMethod -Uri $pollUrl -Method Get -TimeoutSec 20
+            } catch {
+              Start-Sleep -Seconds 5
+              continue
             }
 
-            lastPayload = await statusResponse.json();
+            $status | ConvertTo-Json -Depth 100 | Out-File -FilePath $statusPath -Encoding utf8
+            $lastStatus = [string]$status.status
 
-            if (lastPayload.status === 'completed') {
-              if (!lastPayload.review_json || !lastPayload.review_markdown) {
-                throw new Error('Completed Llama review is missing review_json or review_markdown');
+            if ($lastStatus -eq 'completed') {
+              if ($null -eq $status.review_json -or [string]::IsNullOrWhiteSpace([string]$status.review_markdown)) {
+                throw "Completed Llama review is missing review_json or review_markdown"
               }
 
-              fs.writeFileSync('.github/artifacts/bob-review.json', `${JSON.stringify(lastPayload.review_json, null, 2)}\n`, 'utf8');
-              fs.writeFileSync('.github/artifacts/bob-review.md', `${lastPayload.review_markdown}\n`, 'utf8');
-              process.exit(0);
+              $status.review_json | ConvertTo-Json -Depth 100 | Out-File -FilePath $reviewJsonPath -Encoding utf8
+              [string]$status.review_markdown | Out-File -FilePath $reviewMarkdownPath -Encoding utf8
+              exit 0
             }
 
-            if (lastPayload.status === 'failed') {
-              throw new Error(`Llama review job failed: ${lastPayload.error || 'Unknown failure'}`);
+            if ($lastStatus -eq 'failed') {
+              throw "Llama review job failed: $($status.error)"
             }
 
-            await new Promise((resolve) => setTimeout(resolve, 5000));
+            if ($attempt -le 6) {
+              Start-Sleep -Seconds 10
+            } else {
+              Start-Sleep -Seconds 20
+            }
           }
 
-          throw new Error(`Timed out waiting for Llama review job completion. Last status: ${lastPayload?.status || 'unknown'}`);
-          '@
-
-          $tempScript = Join-Path $env:RUNNER_TEMP 'call-llama-review.mjs'
-          $script | Out-File -FilePath $tempScript -Encoding utf8
-          node $tempScript
+          throw "Timed out waiting for Llama review job completion. Last status: $lastStatus"
 
       - name: Verify review artifacts exist
         id: review_artifacts
@@ -287,6 +315,7 @@ jobs:
             .github/artifacts/bob-pr-review-bundle.json
             .github/artifacts/bob-review.md
             .github/artifacts/bob-review.json
+            .github/artifacts/llama-job-status.json
             .github/artifacts/changed-files-filtered.txt
             .github/artifacts/pull-request.diff
           retention-days: 30
