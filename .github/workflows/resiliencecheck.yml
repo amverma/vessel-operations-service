@@ -162,11 +162,9 @@ jobs:
         shell: powershell
         run: |
           $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
-          $endpoint = $env:LLAMA_AGENT_REVIEW_ENDPOINT
-          $submitUrl = "$baseUrl$endpoint"
-          $bundlePath = Join-Path $env:ARTIFACTS_DIR 'bob-pr-review-bundle.json'
-          $bundleJson = Get-Content -Raw -Path $bundlePath
-          $payload = "{`"bundle`":$bundleJson}"
+          $submitUrl = "$baseUrl/review-file"
+          $bundlePath = Resolve-Path (Join-Path $env:ARTIFACTS_DIR 'bob-pr-review-bundle.json')
+          $payload = @{ bundle_file = [string]$bundlePath } | ConvertTo-Json
 
           try {
             $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 30

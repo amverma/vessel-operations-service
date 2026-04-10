@@ -37,12 +37,16 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
 }
 
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
 function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) {
     return null;
   }
 
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  return readJson(filePath);
 }
 
 function getJobDir(jobId) {
@@ -53,24 +57,41 @@ function getJobMetaPath(jobId) {
   return path.join(getJobDir(jobId), 'job.json');
 }
 
-function writeBundleArtifacts(rootDir, bundle, jobId) {
-  const artifactsDir = path.join(rootDir, '.github', 'artifacts', 'jobs', jobId);
-  ensureDir(artifactsDir);
-
-  const bundlePath = path.join(artifactsDir, 'bob-pr-review-bundle.json');
-  const markdownPath = path.join(artifactsDir, 'bob-review.md');
-  const jsonPath = path.join(artifactsDir, 'bob-review.json');
-
-  fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, 'utf8');
-
-  return { artifactsDir, bundlePath, markdownPath, jsonPath };
+function getJobBundlePath(jobId) {
+  return path.join(getJobDir(jobId), 'bob-pr-review-bundle.json');
 }
 
-function mirrorJobArtifactsToDefaultPaths(rootDir, artifactPaths) {
-  const defaultArtifactsDir = path.join(rootDir, '.github', 'artifacts');
+function getJobMarkdownPath(jobId) {
+  return path.join(getJobDir(jobId), 'bob-review.md');
+}
+
+function getJobJsonPath(jobId) {
+  return path.join(getJobDir(jobId), 'bob-review.json');
+}
+
+function createArtifactPaths(jobId) {
+  return {
+    artifactsDir: getJobDir(jobId),
+    bundlePath: getJobBundlePath(jobId),
+    markdownPath: getJobMarkdownPath(jobId),
+    jsonPath: getJobJsonPath(jobId)
+  };
+}
+
+function writeBundleArtifacts(bundle, jobId) {
+  const artifactPaths = createArtifactPaths(jobId);
+  ensureDir(artifactPaths.artifactsDir);
+  fs.writeFileSync(artifactPaths.bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, 'utf8');
+  return artifactPaths;
+}
+
+function mirrorJobArtifactsToDefaultPaths(artifactPaths) {
+  const defaultArtifactsDir = path.join(REPO_ROOT, '.github', 'artifacts');
   ensureDir(defaultArtifactsDir);
 
-  fs.copyFileSync(artifactPaths.bundlePath, path.join(defaultArtifactsDir, 'bob-pr-review-bundle.json'));
+  if (fs.existsSync(artifactPaths.bundlePath)) {
+    fs.copyFileSync(artifactPaths.bundlePath, path.join(defaultArtifactsDir, 'bob-pr-review-bundle.json'));
+  }
 
   if (fs.existsSync(artifactPaths.jsonPath)) {
     fs.copyFileSync(artifactPaths.jsonPath, path.join(defaultArtifactsDir, 'bob-review.json'));
@@ -108,8 +129,7 @@ function hydrateJobsFromDisk() {
       continue;
     }
 
-    const jobPath = getJobMetaPath(entry.name);
-    const saved = readJsonIfExists(jobPath);
+    const saved = readJsonIfExists(getJobMetaPath(entry.name));
     if (!saved || !saved.job_id) {
       continue;
     }
@@ -120,9 +140,9 @@ function hydrateJobsFromDisk() {
       created_at: saved.created_at || new Date().toISOString(),
       updated_at: saved.updated_at || new Date().toISOString(),
       files: saved.files || {
-        bundle: path.join(getJobDir(saved.job_id), 'bob-pr-review-bundle.json'),
-        json: path.join(getJobDir(saved.job_id), 'bob-review.json'),
-        markdown: path.join(getJobDir(saved.job_id), 'bob-review.md')
+        bundle: getJobBundlePath(saved.job_id),
+        json: getJobJsonPath(saved.job_id),
+        markdown: getJobMarkdownPath(saved.job_id)
       },
       review_json: saved.review_json || null,
       review_markdown: saved.review_markdown || null,
@@ -131,12 +151,12 @@ function hydrateJobsFromDisk() {
   }
 }
 
-function runReviewer(rootDir, artifactPaths) {
+function runReviewer(artifactPaths) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
       [
-        path.join(rootDir, '.github', 'llama-agent', 'review-bundle.js'),
+        path.join(REPO_ROOT, '.github', 'llama-agent', 'review-bundle.js'),
         '--bundle',
         artifactPaths.bundlePath,
         '--markdown-output',
@@ -145,7 +165,7 @@ function runReviewer(rootDir, artifactPaths) {
         artifactPaths.jsonPath
       ],
       {
-        cwd: rootDir,
+        cwd: REPO_ROOT,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: process.env
       }
@@ -170,7 +190,7 @@ function runReviewer(rootDir, artifactPaths) {
         return;
       }
 
-      const reviewJson = JSON.parse(fs.readFileSync(artifactPaths.jsonPath, 'utf8'));
+      const reviewJson = readJson(artifactPaths.jsonPath);
       const reviewMarkdown = fs.readFileSync(artifactPaths.markdownPath, 'utf8');
 
       resolve({
@@ -206,8 +226,8 @@ async function processNextJob() {
   persistJob(job);
 
   try {
-    const result = await runReviewer(REPO_ROOT, job.files);
-    mirrorJobArtifactsToDefaultPaths(REPO_ROOT, job.files);
+    const result = await runReviewer(job.files);
+    mirrorJobArtifactsToDefaultPaths(job.files);
     job.status = 'completed';
     job.updated_at = new Date().toISOString();
     job.review_json = result.reviewJson;
@@ -225,9 +245,9 @@ async function processNextJob() {
   }
 }
 
-function createJob(bundle) {
+function createJobFromBundle(bundle) {
   const jobId = crypto.randomUUID();
-  const artifactPaths = writeBundleArtifacts(REPO_ROOT, bundle, jobId);
+  const artifactPaths = writeBundleArtifacts(bundle, jobId);
 
   const job = {
     id: jobId,
@@ -250,6 +270,17 @@ function createJob(bundle) {
   setImmediate(processNextJob);
 
   return job;
+}
+
+function createJobFromBundleFile(bundleFilePath) {
+  const resolvedBundlePath = path.resolve(bundleFilePath);
+
+  if (!fs.existsSync(resolvedBundlePath)) {
+    throw new Error(`Bundle file does not exist: ${resolvedBundlePath}`);
+  }
+
+  const bundle = readJson(resolvedBundlePath);
+  return createJobFromBundle(bundle);
 }
 
 hydrateJobsFromDisk();
@@ -281,7 +312,30 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      const job = createJob(payload.bundle);
+      const job = createJobFromBundle(payload.bundle);
+
+      sendJson(response, 202, {
+        status: 'accepted',
+        job_id: job.id,
+        poll_url: `/review/${job.id}`,
+        files: job.files,
+        queue_position: pendingQueue.indexOf(job.id) + 1
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/review-file') {
+      const rawBody = await collectRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+
+      if (!payload.bundle_file || typeof payload.bundle_file !== 'string') {
+        sendJson(response, 400, {
+          error: 'Missing required string field: bundle_file'
+        });
+        return;
+      }
+
+      const job = createJobFromBundleFile(payload.bundle_file);
 
       sendJson(response, 202, {
         status: 'accepted',
