@@ -1,6 +1,6 @@
-# R1-R20 Resilience Checker - Setup Guide
+# R1-R23 Resilience Checker - Setup Guide
 
-Complete guide to set up the R1-R20 Resilience Checker with automated merge protection.
+Complete guide to set up the R1-R23 Resilience Checker with automated merge protection.
 
 ## Table of Contents
 
@@ -43,7 +43,7 @@ The workflow must run at least once before it appears in branch protection setti
 
 **Option A: Manual Trigger (Recommended)**
 1. Go to **Actions** tab
-2. Select **R1-R20 Resilience Guardrail Checker**
+2. Select **R1-R23 Resilience Guardrail Checker**
 3. Click **Run workflow** → Select `main` → **Run workflow**
 4. Wait 1-2 minutes ✅
 

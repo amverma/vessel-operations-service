@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vessel-operations-service
+  namespace: freight-forwarder
+  labels:
+    app: vessel-operations-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vessel-operations-service
+  template:
+    metadata:
+      labels:
+        app: vessel-operations-service
+    spec:
+      containers:
+      - name: vessel-operations-service
+        image: vessel-operations-service:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          initialDelaySeconds: 20
+      terminationGracePeriodSeconds: 30
+
+# Made with Bob

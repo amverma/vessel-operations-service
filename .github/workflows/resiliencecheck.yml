@@ -1,4 +1,4 @@
-name: R1-R20 Resilience Guardrail Checker
+name: R1-R23 Resilience Guardrail Checker
 
 on:
   pull_request:
@@ -38,7 +38,7 @@ env:
 
 jobs:
   resilience-check:
-    name: R1-R20 Guardrail Check
+    name: R1-R23 Guardrail Check
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,7 +79,7 @@ jobs:
           echo "changed_count=$CHANGED_COUNT" >> $GITHUB_OUTPUT
           echo "📝 Found $CHANGED_COUNT changed files to analyze"
       
-      - name: Run R1-R20 Resilience Checker
+      - name: Run R1-R23 Resilience Checker
         id: resilience-check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,7 +113,7 @@ jobs:
             const report = JSON.parse(fs.readFileSync('resilience-report.json', 'utf8'));
             
             // Build comment body
-            let commentBody = `## 🛡️ R1-R20 Resilience Guardrail Check v${process.env.CHECKER_VERSION}\n\n`;
+            let commentBody = `## 🛡️ R1-R23 Resilience Guardrail Check v${process.env.CHECKER_VERSION}\n\n`;
             commentBody += `**Status:** ${report.overall_status === 'PASS' ? '✅ PASSED' : '❌ FAILED'}\n`;
             commentBody += `**Checked:** ${report.timestamp}\n\n`;
             
@@ -159,7 +159,7 @@ jobs:
             // Footer
             commentBody += `---\n`;
             commentBody += `⚠️ **This check is mandatory and cannot be bypassed without Architecture Board approval.**\n\n`;
-            commentBody += `📋 See [R1-R20 Resilience Checklist](../blob/main/.github/R1-R20-RESILIENCE-CHECKLIST.md) for details.\n`;
+            commentBody += `📋 See [R1-R23 Resilience Checklist](../blob/main/.github/R1-R20-RESILIENCE-CHECKLIST.md) for details.\n`;
             commentBody += `🔗 Repository: vessel-operations-service\n`;
             
             // Find existing comment
@@ -171,7 +171,7 @@ jobs:
             
             const botComment = comments.find(comment => 
               comment.user.type === 'Bot' && 
-              comment.body.includes('R1-R20 Resilience Guardrail Check')
+              comment.body.includes('R1-R23 Resilience Guardrail Check')
             );
             
             if (botComment) {
@@ -196,12 +196,12 @@ jobs:
           if [ -f resilience-report.json ]; then
             STATUS=$(jq -r '.overall_status' resilience-report.json)
             if [ "$STATUS" = "FAIL" ]; then
-              echo "❌ R1-R20 Resilience check FAILED"
+              echo "❌ R1-R23 Resilience check FAILED"
               echo "Critical resilience patterns are missing or incorrectly implemented."
               echo "This PR cannot be merged until all CRITICAL issues are resolved."
               exit 1
             else
-              echo "✅ R1-R20 Resilience check PASSED"
+              echo "✅ R1-R23 Resilience check PASSED"
             fi
           else
             echo "⚠️ Resilience report not found"
@@ -214,9 +214,9 @@ jobs:
           if [ -f resilience-report.json ]; then
             STATUS=$(jq -r '.overall_status' resilience-report.json)
             if [ "$STATUS" = "PASS" ]; then
-              echo "![Resilience Check](https://img.shields.io/badge/R1--R20-PASS-success)" > resilience-badge.md
+              echo "![Resilience Check](https://img.shields.io/badge/R1--R23-PASS-success)" > resilience-badge.md
             else
-              echo "![Resilience Check](https://img.shields.io/badge/R1--R20-FAIL-critical)" > resilience-badge.md
+              echo "![Resilience Check](https://img.shields.io/badge/R1--R23-FAIL-critical)" > resilience-badge.md
             fi
           fi
       
@@ -241,7 +241,7 @@ jobs:
           script: |
             const issue_body = `## ⚠️ Resilience Check Bypass Attempt
             
-            A pull request has been labeled to bypass the R1-R20 Resilience Check.
+            A pull request has been labeled to bypass the R1-R23 Resilience Check.
             
             **Repository:** vessel-operations-service
             **PR:** #${{ github.event.pull_request.number }}

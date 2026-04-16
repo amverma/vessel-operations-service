@@ -1,0 +1,39 @@
+{
+  "type": "record",
+  "name": "VesselEvent",
+  "namespace": "com.freightforwarder.vesseloperations.events",
+  "doc": "Event representing vessel operations",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "Unique identifier for the event"
+    },
+    {
+      "name": "vesselId",
+      "type": "string",
+      "doc": "Unique identifier for the vessel"
+    },
+    {
+      "name": "eventType",
+      "type": {
+        "type": "enum",
+        "name": "EventType",
+        "symbols": ["DEPARTED", "ARRIVED", "CONTAINER_LOADED"]
+      },
+      "doc": "Type of vessel event"
+    },
+    {
+      "name": "timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Event timestamp in milliseconds"
+    },
+    {
+      "name": "port",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Port code where event occurred"
+    }
+  ]
+}

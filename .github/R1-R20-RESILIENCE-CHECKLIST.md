@@ -1,10 +1,23 @@
-# R1-R20 Resilience Checklist
+# R1-R23 Resilience Checklist
 
-This document provides a comprehensive guide to the R1-R20 resilience patterns that are automatically checked by the R1-R20 Resilience Guardrail Checker workflow.
+This document provides a comprehensive guide to the R1-R23 resilience patterns that are automatically checked by the R1-R23 Resilience Guardrail Checker workflow.
 
 ## Overview
 
-The R1-R20 checklist represents 20 critical resilience patterns that every microservice must implement to ensure high availability, fault tolerance, and disaster recovery capabilities. These patterns are based on industry best practices and lessons learned from production incidents.
+The R1-R23 checklist represents 23 critical resilience patterns that every microservice must implement to ensure high availability, fault tolerance, disaster recovery capabilities, and infrastructure best practices. These patterns are based on industry best practices and lessons learned from production incidents.
+
+**Pattern Categories:**
+- **R1-R3:** Fault Tolerance (Circuit Breaker, Retry, Timeout)
+- **R4-R5:** Resource Management (Bulkhead, Rate Limiting)
+- **R6-R7:** Availability (Health Checks, Graceful Shutdown)
+- **R8-R9:** Data Integrity (Idempotency, Dead Letter Queue)
+- **R10-R12:** Observability (Logging, Tracing, Metrics)
+- **R13-R14:** Message Processing (Schema Evolution, Kafka Best Practices)
+- **R15:** Database (Connection Pooling)
+- **R16-R18:** Kubernetes (Resource Limits, HPA, PDB)
+- **R19:** Security (Secrets Management)
+- **R20:** Disaster Recovery (DR Testing)
+- **R21-R23:** Infrastructure as Code (Terraform, OpenAPI, Helm)
 
 ---
 
@@ -590,6 +603,128 @@ Regular DR drills and backup verification to ensure recovery capabilities.
 
 **Recommendation:**  
 Document backup strategy, RTO/RPO, and maintain DR runbook.
+
+---
+
+## Infrastructure as Code Patterns
+
+### R21: Terraform State Backend Configuration
+**Severity:** HIGH
+**Category:** Infrastructure as Code
+
+**Description:**
+Terraform state must be stored in a remote backend with locking enabled to prevent state corruption and enable team collaboration.
+
+**Implementation:**
+- Configure remote backend (S3, Azure Storage, GCS, or Terraform Cloud)
+- Enable state locking (DynamoDB for S3, built-in for Azure/GCS)
+- Use separate state files for different environments
+- Enable state encryption at rest
+
+**Example:**
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state"
+    key            = "vessel-operations/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-state-lock"
+    encrypt        = true
+  }
+}
+```
+
+**Recommendation:**
+Configure S3/Azure Storage backend with state locking (DynamoDB/Azure Storage).
+
+---
+
+### R22: OpenAPI Specification Validation
+**Severity:** MEDIUM
+**Category:** API Design
+
+**Description:**
+API specifications must include comprehensive error responses, rate limiting information, and versioning to ensure robust API contracts.
+
+**Implementation:**
+- Define all error responses (4xx and 5xx)
+- Document rate limiting headers (X-RateLimit-*)
+- Include API versioning in path or headers
+- Specify authentication and authorization requirements
+- Document all request/response schemas
+
+**Example:**
+```yaml
+paths:
+  /api/v1/vessels:
+    get:
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Bad Request
+        '429':
+          description: Too Many Requests
+          headers:
+            X-RateLimit-Limit:
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+        '500':
+          description: Internal Server Error
+```
+
+**Recommendation:**
+Include 4xx/5xx responses, rate limit headers, and API versioning in OpenAPI spec.
+
+---
+
+### R23: Helm Chart Best Practices
+**Severity:** MEDIUM
+**Category:** Deployment
+
+**Description:**
+Helm charts must follow best practices for production deployments including resource management, health checks, and proper configuration.
+
+**Implementation:**
+- Define resource requests and limits in values.yaml
+- Configure liveness, readiness, and startup probes
+- Set appropriate replica count
+- Use proper labels and annotations
+- Include security context settings
+- Document all configurable values
+
+**Example values.yaml:**
+```yaml
+replicaCount: 3
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: 8080
+  initialDelaySeconds: 20
+  periodSeconds: 5
+```
+
+**Recommendation:**
+Include resource limits, health checks, and proper labels in Helm charts.
 
 ---
 

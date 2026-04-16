@@ -1,0 +1,47 @@
+openapi: 3.0.0
+info:
+  title: Vessel Operations Service API
+  version: 1.0.0
+  description: API for managing vessel operations
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /vessels/{vesselId}/load:
+    post:
+      summary: Load container on vessel
+      operationId: loadContainer
+      parameters:
+        - name: vesselId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadContainerRequest'
+      responses:
+        '200':
+          description: Container loaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoadContainerResponse'
+components:
+  schemas:
+    LoadContainerRequest:
+      type: object
+      required:
+        - containerId
+      properties:
+        containerId:
+          type: string
+    LoadContainerResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+
+# Made with Bob

@@ -766,6 +766,185 @@ class DisasterRecoveryTestingCheck(ResilienceCheck):
         self.passed = True
         return True
 
+class TerraformStateBackendCheck(ResilienceCheck):
+    """R21: Terraform State Backend Configuration"""
+    
+    def __init__(self):
+        super().__init__(
+            "R21",
+            "Terraform State Backend Configuration",
+            "Infrastructure as Code",
+            "HIGH",
+            "Terraform state must be stored in a remote backend with locking enabled."
+        )
+        self.recommendation = "Configure S3/Azure Storage backend with state locking (DynamoDB/Azure Storage)."
+    
+    def check(self, file_path: str, content: str) -> bool:
+        # Only check Terraform files
+        if not file_path.endswith('.tf'):
+            self.passed = True
+            return True
+        
+        # Check for backend configuration
+        backend_patterns = [
+            r'backend\s+"s3"',
+            r'backend\s+"azurerm"',
+            r'backend\s+"gcs"',
+            r'backend\s+"remote"'
+        ]
+        
+        has_backend = any(re.search(p, content, re.IGNORECASE) for p in backend_patterns)
+        
+        if has_backend:
+            # Check for state locking
+            locking_patterns = [
+                r'dynamodb_table',
+                r'lock',
+                r'state_locking'
+            ]
+            has_locking = any(re.search(p, content, re.IGNORECASE) for p in locking_patterns)
+            
+            if not has_locking:
+                self.add_finding(file_path, "Terraform backend configured but state locking not detected")
+                self.passed = False
+                return False
+            
+            self.passed = True
+            return True
+        else:
+            # Check if this is a main.tf or backend.tf file
+            if 'main.tf' in file_path or 'backend.tf' in file_path:
+                self.add_finding(file_path, "No remote backend configuration found in Terraform")
+                self.passed = False
+                return False
+        
+        self.passed = True
+        return True
+
+
+class OpenAPISpecificationCheck(ResilienceCheck):
+    """R22: OpenAPI Specification Validation"""
+    
+    def __init__(self):
+        super().__init__(
+            "R22",
+            "OpenAPI Specification Validation",
+            "API Design",
+            "MEDIUM",
+            "API specifications must include error responses, rate limiting, and versioning."
+        )
+        self.recommendation = "Include 4xx/5xx responses, rate limit headers, and API versioning in OpenAPI spec."
+    
+    def check(self, file_path: str, content: str) -> bool:
+        # Only check OpenAPI/Swagger files
+        if not (file_path.endswith(('.yaml', '.yml', '.json')) and 
+                ('openapi' in file_path.lower() or 'swagger' in file_path.lower() or 
+                 'openapi:' in content.lower() or 'swagger:' in content.lower())):
+            self.passed = True
+            return True
+        
+        issues = []
+        
+        # Check for error responses
+        error_response_patterns = [
+            r'["\']4\d{2}["\']',  # 4xx responses
+            r'["\']5\d{2}["\']'   # 5xx responses
+        ]
+        has_error_responses = any(re.search(p, content) for p in error_response_patterns)
+        if not has_error_responses:
+            issues.append("Missing error response definitions (4xx/5xx)")
+        
+        # Check for rate limiting headers
+        rate_limit_patterns = [
+            r'X-RateLimit',
+            r'RateLimit',
+            r'rate.*limit',
+            r'throttle'
+        ]
+        has_rate_limiting = any(re.search(p, content, re.IGNORECASE) for p in rate_limit_patterns)
+        if not has_rate_limiting:
+            issues.append("No rate limiting headers defined")
+        
+        # Check for versioning
+        version_patterns = [
+            r'version:\s*["\']?\d+',
+            r'/v\d+/',
+            r'api.*version'
+        ]
+        has_versioning = any(re.search(p, content, re.IGNORECASE) for p in version_patterns)
+        if not has_versioning:
+            issues.append("API versioning not detected")
+        
+        if issues:
+            for issue in issues:
+                self.add_finding(file_path, issue)
+            self.passed = False
+            return False
+        
+        self.passed = True
+        return True
+
+
+class HelmChartBestPracticesCheck(ResilienceCheck):
+    """R23: Helm Chart Best Practices"""
+    
+    def __init__(self):
+        super().__init__(
+            "R23",
+            "Helm Chart Best Practices",
+            "Deployment",
+            "MEDIUM",
+            "Helm charts must follow best practices for production deployments."
+        )
+        self.recommendation = "Include resource limits, health checks, and proper labels in Helm charts."
+    
+    def check(self, file_path: str, content: str) -> bool:
+        # Only check Helm chart files
+        if not (file_path.startswith('helm') and file_path.endswith(('.yaml', '.yml'))):
+            self.passed = True
+            return True
+        
+        # Check Chart.yaml for required fields
+        if 'Chart.yaml' in file_path:
+            required_fields = ['name', 'version', 'apiVersion']
+            missing_fields = [f for f in required_fields if not re.search(f'{f}:', content)]
+            
+            if missing_fields:
+                self.add_finding(file_path, f"Missing required fields in Chart.yaml: {', '.join(missing_fields)}")
+                self.passed = False
+                return False
+        
+        # Check values.yaml for best practices
+        if 'values.yaml' in file_path:
+            issues = []
+            
+            # Check for resource limits
+            if not re.search(r'resources:', content):
+                issues.append("No resource limits defined in values.yaml")
+            
+            # Check for health checks
+            health_check_patterns = [
+                r'livenessProbe:',
+                r'readinessProbe:',
+                r'startupProbe:'
+            ]
+            has_health_checks = any(re.search(p, content) for p in health_check_patterns)
+            if not has_health_checks:
+                issues.append("No health check probes defined in values.yaml")
+            
+            # Check for replica count
+            if not re.search(r'replicaCount:', content):
+                issues.append("No replicaCount defined in values.yaml")
+            
+            if issues:
+                for issue in issues:
+                    self.add_finding(file_path, issue)
+                self.passed = False
+                return False
+        
+        self.passed = True
+        return True
+
 
 class ResilienceChecker:
     """Main resilience checker class"""
@@ -798,13 +977,16 @@ class ResilienceChecker:
             HPACheck(),
             PDBCheck(),
             SecretsManagementCheck(),
-            DisasterRecoveryTestingCheck()
+            DisasterRecoveryTestingCheck(),
+            TerraformStateBackendCheck(),
+            OpenAPISpecificationCheck(),
+            HelmChartBestPracticesCheck()
         ]
     
     def _should_check_file(self, file_path: Path) -> bool:
         """Determine if file should be checked"""
         # Check if file is in monitored paths
-        monitored_paths = ['src', 'k8s', 'helm', 'schemas', 'infrastructure', 'specs']
+        monitored_paths = ['src', 'k8s', 'helm', 'schemas', 'infrastructure', 'specs', 'config']
         
         path_str = str(file_path)
         if not any(path_str.startswith(p) or f'/{p}/' in path_str or f'\\{p}\\' in path_str for p in monitored_paths):
@@ -815,7 +997,8 @@ class ResilienceChecker:
             '.java', '.kt', '.py', '.js', '.ts', '.go',
             '.yml', '.yaml', '.json',
             '.avsc', '.avdl',
-            '.md', '.txt', '.adoc'
+            '.md', '.txt', '.adoc',
+            '.tf', '.tfvars'
         ]
         
         return any(str(file_path).endswith(ext) for ext in relevant_extensions)
@@ -824,7 +1007,7 @@ class ResilienceChecker:
         """Get list of files to check"""
         files = []
         
-        for pattern in ['src/**/*', 'k8s/**/*', 'helm/**/*', 'schemas/**/*', 'infrastructure/**/*', 'specs/**/*']:
+        for pattern in ['src/**/*', 'k8s/**/*', 'helm/**/*', 'schemas/**/*', 'infrastructure/**/*', 'specs/**/*', 'config/**/*']:
             for file_path in self.repo_path.glob(pattern):
                 if file_path.is_file() and self._should_check_file(file_path):
                     files.append(file_path)
