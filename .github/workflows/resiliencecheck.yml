@@ -159,7 +159,7 @@ jobs:
             // Footer
             commentBody += `---\n`;
             commentBody += `⚠️ **This check is mandatory and cannot be bypassed without Architecture Board approval.**\n\n`;
-            commentBody += `📋 See [R1-R20 Resilience Checklist](../blob/main/docs/R1-R20-RESILIENCE-CHECKLIST.md) for details.\n`;
+            commentBody += `📋 See [R1-R20 Resilience Checklist](../blob/main/.github/R1-R20-RESILIENCE-CHECKLIST.md) for details.\n`;
             commentBody += `🔗 Repository: vessel-operations-service\n`;
             
             // Find existing comment
