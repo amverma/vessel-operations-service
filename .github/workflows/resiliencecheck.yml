@@ -1,4 +1,4 @@
-name: Bob Fully Agentic Resilience Checker v3.0
+name: R1-R20 Resilience Guardrail Checker
 
 on:
   pull_request:
@@ -11,337 +11,265 @@ on:
       - 'infrastructure/**'
       - 'specs/**'
       - 'config/**'
-      - 'resources/**'
       - 'application.yml'
       - 'application.yaml'
       - 'pom.xml'
       - 'build.gradle'
   workflow_dispatch:
     inputs:
+      severity_threshold:
+        description: 'Minimum severity to fail the check (CRITICAL, HIGH, MEDIUM, LOW)'
+        required: false
+        default: 'CRITICAL'
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
       target_branch:
-        description: 'Branch to compare against for manual execution'
+        description: 'Target branch to compare against (optional)'
         required: false
         default: ''
 
 env:
-  ARTIFACTS_DIR: '.github/artifacts'
-  CONFIG_FILE: '.github/bob-agentic-config.yml'
-  LLAMA_AGENT_BASE_URL: ${{ secrets.LLAMA_AGENT_BASE_URL }}
-  LLAMA_AGENT_REVIEW_ENDPOINT: '/review'
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  CHECKER_VERSION: '1.0'
+  PYTHON_VERSION: '3.11'
 
 jobs:
-  bob-agentic-review:
-    name: Bob Agentic Resilience Review
-    runs-on: [self-hosted, windows, llama]
+  resilience-check:
+    name: R1-R20 Guardrail Check
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       issues: write
-
+    
     steps:
-      - name: Enable Git long paths on runner
-        shell: powershell
-        run: |
-          git config --global core.longpaths true
-
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          path: repo
-
-      - name: Enter repository workspace
-        shell: powershell
-        run: |
-          "GITHUB_WORKSPACE=$((Resolve-Path repo).Path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Fetch base branch
+          fetch-depth: 0  # Full history for better analysis
+      
+      - name: Checkout base branch
         if: github.event_name == 'pull_request'
-        shell: powershell
         run: |
-          git -C repo fetch origin ${{ github.base_ref }}
-
-      - name: Resolve refs
-        id: refs
-        shell: powershell
+          git fetch origin ${{ github.base_ref }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
         run: |
-          if ("${{ github.event_name }}" -eq "pull_request") {
-            "base_ref=${{ github.base_ref }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            "head_ref=${{ github.head_ref }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          } else {
-            "base_ref=${{ github.event.inputs.target_branch }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            $headRef = git -C repo rev-parse --abbrev-ref HEAD
-            "head_ref=$headRef" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
-
-      - name: Verify local Node runtime
-        shell: powershell
+          python -m pip install --upgrade pip
+          pip install pyyaml requests jinja2 gitpython
+      
+      - name: Get changed files
+        id: changed-files
+        if: github.event_name == 'pull_request'
         run: |
-          node --version
-          npm --version
-
-      - name: Check Llama agent health
-        id: llama_health
-        shell: powershell
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/)' >> $GITHUB_OUTPUT || true
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Count changed files
+          CHANGED_COUNT=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/)' | wc -l)
+          echo "changed_count=$CHANGED_COUNT" >> $GITHUB_OUTPUT
+          echo "📝 Found $CHANGED_COUNT changed files to analyze"
+      
+      - name: Run R1-R20 Resilience Checker
+        id: resilience-check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          SEVERITY_THRESHOLD: ${{ github.event.inputs.severity_threshold || 'CRITICAL' }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:LLAMA_AGENT_BASE_URL)) {
-            throw "Missing required secret: LLAMA_AGENT_BASE_URL"
-          }
-
-          $healthUrl = "$($env:LLAMA_AGENT_BASE_URL.TrimEnd('/'))/health"
-          try {
-            $health = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 15
-            if ($health.status -ne 'ok') {
-              throw "Health endpoint returned unexpected status: $($health.status)"
-            }
-            "healthy=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          } catch {
-            throw "Unable to reach local Llama agent health endpoint at $healthUrl. $($_.Exception.Message)"
-          }
-
-      - name: Collect changed files
-        id: changed_files
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:ARTIFACTS_DIR | Out-Null
-
-          if ("${{ github.event_name }}" -eq "pull_request") {
-            $diffTarget = "origin/${{ github.base_ref }}...HEAD"
-          } else {
-            $diffTarget = "HEAD~1...HEAD"
-          }
-
-          $changedFiles = @(git -C repo diff --name-only $diffTarget)
-          $changedFiles | Out-File -FilePath "$env:ARTIFACTS_DIR/changed-files.txt" -Encoding utf8
-
-          $pattern = '^(src/|k8s/|helm/|schemas/|infrastructure/|specs/|config/|resources/|application\.ya?ml|pom\.xml|build\.gradle)'
-          $filtered = @($changedFiles | Where-Object { $_ -match $pattern -and -not [string]::IsNullOrWhiteSpace($_) })
-
-          if ($filtered.Count -gt 0) {
-            $filtered | Out-File -FilePath "$env:ARTIFACTS_DIR/changed-files-filtered.txt" -Encoding utf8
-            "has_relevant_changes=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          } else {
-            New-Item -ItemType File -Force -Path "$env:ARTIFACTS_DIR/changed-files-filtered.txt" | Out-Null
-            "has_relevant_changes=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
-
-      - name: Capture PR diff
-        if: steps.changed_files.outputs.has_relevant_changes == 'true'
-        shell: powershell
-        run: |
-          if ("${{ github.event_name }}" -eq "pull_request") {
-            $diffTarget = "origin/${{ github.base_ref }}...HEAD"
-          } else {
-            $diffTarget = "HEAD~1...HEAD"
-          }
-
-          git -C repo diff $diffTarget | Out-File -FilePath "$env:ARTIFACTS_DIR/pull-request.diff" -Encoding utf8
-
-      - name: Package PR for Llama-backed Bob
-        id: package_bundle
-        if: steps.changed_files.outputs.has_relevant_changes == 'true'
-        shell: powershell
-        run: |
-          node repo/.github/llama-agent/package-pr-for-bob.js `
-            --repo-root repo `
-            --config "repo/$env:CONFIG_FILE" `
-            --changed-files "$env:ARTIFACTS_DIR/changed-files-filtered.txt" `
-            --diff-file "$env:ARTIFACTS_DIR/pull-request.diff" `
-            --output-dir "$env:ARTIFACTS_DIR" `
-            --repository "${{ github.repository }}" `
-            --pr-number "${{ github.event.pull_request.number || '' }}" `
-            --pr-title "${{ github.event.pull_request.title || github.workflow }}" `
-            --pr-author "${{ github.event.pull_request.user.login || github.actor }}" `
-            --base-ref "${{ steps.refs.outputs.base_ref }}" `
-            --head-ref "${{ steps.refs.outputs.head_ref }}"
-
-      - name: Submit Llama review job
-        id: submit_review
-        if: steps.changed_files.outputs.has_relevant_changes == 'true' && steps.llama_health.outputs.healthy == 'true'
-        shell: powershell
-        run: |
-          $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
-          $bundlePath = Resolve-Path (Join-Path $env:ARTIFACTS_DIR 'bob-pr-review-bundle.json')
-          $bundleJson = Get-Content -Raw -Path $bundlePath
-          $response = $null
-          $submitUrl = "$baseUrl/review-file"
-
-          try {
-            $payload = @{ bundle_file = [string]$bundlePath } | ConvertTo-Json
-            $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 30
-          } catch {
-            $statusCode = $null
-            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-              $statusCode = [int]$_.Exception.Response.StatusCode
-            }
-
-            if ($statusCode -eq 404) {
-              $submitUrl = "$baseUrl$($env:LLAMA_AGENT_REVIEW_ENDPOINT)"
-              $legacyPayload = "{`"bundle`":$bundleJson}"
-
-              try {
-                $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $legacyPayload -TimeoutSec 30
-              } catch {
-                throw "Failed to submit review job using fallback endpoint $submitUrl within 30 seconds. $($_.Exception.Message)"
-              }
-            } elseif ($statusCode -eq 500) {
-              $submitUrl = "$baseUrl$($env:LLAMA_AGENT_REVIEW_ENDPOINT)"
-              $legacyPayload = "{`"bundle`":$bundleJson}"
-
-              try {
-                $response = Invoke-RestMethod -Uri $submitUrl -Method Post -ContentType 'application/json' -Body $legacyPayload -TimeoutSec 30
-              } catch {
-                throw "Failed to submit review job after retrying legacy endpoint $submitUrl for file-based server error. $($_.Exception.Message)"
-              }
-            } else {
-              throw "Failed to submit review job to $submitUrl within 30 seconds. $($_.Exception.Message)"
-            }
-          }
-
-          if (-not $response.job_id) {
-            throw "Llama agent submit response is missing job_id"
-          }
-
-          "job_id=$($response.job_id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          if ($response.poll_url) {
-            "poll_url=$($response.poll_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          } else {
-            "poll_url=/review/$($response.job_id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
-
-      - name: Poll Llama review job
-        id: llama_api
-        if: steps.changed_files.outputs.has_relevant_changes == 'true' && steps.submit_review.outcome == 'success'
-        shell: powershell
-        run: |
-          $baseUrl = $env:LLAMA_AGENT_BASE_URL.TrimEnd('/')
-          $pollPath = "${{ steps.submit_review.outputs.poll_url }}"
-          $pollUrl = "$baseUrl$pollPath"
-          $reviewJsonPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.json'
-          $reviewMarkdownPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.md'
-          $statusPath = Join-Path $env:ARTIFACTS_DIR 'llama-job-status.json'
-
-          $deadline = (Get-Date).AddMinutes(30)
-          $lastStatus = 'unknown'
-          $attempt = 0
-
-          while ((Get-Date) -lt $deadline) {
-            $attempt += 1
-            try {
-              $status = Invoke-RestMethod -Uri $pollUrl -Method Get -TimeoutSec 20
-            } catch {
-              Start-Sleep -Seconds 5
-              continue
-            }
-
-            $status | ConvertTo-Json -Depth 100 | Out-File -FilePath $statusPath -Encoding utf8
-            $lastStatus = [string]$status.status
-
-            if ($lastStatus -eq 'completed') {
-              if ($null -eq $status.review_json -or [string]::IsNullOrWhiteSpace([string]$status.review_markdown)) {
-                throw "Completed Llama review is missing review_json or review_markdown"
-              }
-
-              $status.review_json | ConvertTo-Json -Depth 100 | Out-File -FilePath $reviewJsonPath -Encoding utf8
-              [string]$status.review_markdown | Out-File -FilePath $reviewMarkdownPath -Encoding utf8
-              exit 0
-            }
-
-            if ($lastStatus -eq 'failed') {
-              throw "Llama review job failed: $($status.error)"
-            }
-
-            if ($attempt -le 6) {
-              Start-Sleep -Seconds 10
-            } else {
-              Start-Sleep -Seconds 20
-            }
-          }
-
-          throw "Timed out waiting for Llama review job completion. Last status: $lastStatus"
-
-      - name: Verify review artifacts exist
-        id: review_artifacts
-        if: steps.changed_files.outputs.has_relevant_changes == 'true' && steps.llama_api.outcome == 'success'
-        shell: powershell
-        run: |
-          $jsonPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.json'
-          $markdownPath = Join-Path $env:ARTIFACTS_DIR 'bob-review.md'
-
-          if (-not (Test-Path $jsonPath)) {
-            throw "Missing Bob JSON result at $jsonPath"
-          }
-
-          if (-not (Test-Path $markdownPath)) {
-            throw "Missing Bob Markdown review at $markdownPath"
-          }
-
-          "review_artifacts_ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Validate Bob result contract
-        if: success() && steps.changed_files.outputs.has_relevant_changes == 'true' && steps.review_artifacts.outcome == 'success'
-        shell: powershell
-        run: |
-          node repo/.github/llama-agent/validate-bob-review-result.js `
-            --json-result "$env:ARTIFACTS_DIR/bob-review.json" `
-            --markdown-result "$env:ARTIFACTS_DIR/bob-review.md"
-
-      - name: Post Bob PR comment
-        if: success() && github.event_name == 'pull_request' && steps.changed_files.outputs.has_relevant_changes == 'true' && steps.llama_api.outcome == 'success' && steps.review_artifacts.outputs.review_artifacts_ready == 'true'
+          python .github/scripts/resilience_checker.py \
+            --repo-path . \
+            --output-format json \
+            --output-file resilience-report.json \
+            --severity-threshold $SEVERITY_THRESHOLD
+      
+      - name: Upload resilience report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resilience-report
+          path: resilience-report.json
+          retention-days: 30
+      
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const markdownPath = '.github/artifacts/bob-review.md';
-
-            if (!fs.existsSync(markdownPath)) {
-              core.info(`Skipping PR comment because ${markdownPath} does not exist.`);
-              return;
+            const report = JSON.parse(fs.readFileSync('resilience-report.json', 'utf8'));
+            
+            // Build comment body
+            let commentBody = `## 🛡️ R1-R20 Resilience Guardrail Check v${process.env.CHECKER_VERSION}\n\n`;
+            commentBody += `**Status:** ${report.overall_status === 'PASS' ? '✅ PASSED' : '❌ FAILED'}\n`;
+            commentBody += `**Checked:** ${report.timestamp}\n\n`;
+            
+            // Summary
+            commentBody += `### Summary\n\n`;
+            commentBody += `| Severity | Passed | Failed | Total |\n`;
+            commentBody += `|----------|--------|--------|-------|\n`;
+            commentBody += `| CRITICAL | ${report.summary.critical.passed} | ${report.summary.critical.failed} | ${report.summary.critical.total} |\n`;
+            commentBody += `| HIGH | ${report.summary.high.passed} | ${report.summary.high.failed} | ${report.summary.high.total} |\n`;
+            commentBody += `| MEDIUM | ${report.summary.medium.passed} | ${report.summary.medium.failed} | ${report.summary.medium.total} |\n`;
+            commentBody += `| LOW | ${report.summary.low.passed} | ${report.summary.low.failed} | ${report.summary.low.total} |\n\n`;
+            
+            // Failed checks
+            if (report.failed_checks.length > 0) {
+              commentBody += `### ❌ Failed Checks\n\n`;
+              for (const check of report.failed_checks) {
+                commentBody += `#### ${check.id}: ${check.name}\n`;
+                commentBody += `**Severity:** ${check.severity} | **Category:** ${check.category}\n\n`;
+                commentBody += `${check.description}\n\n`;
+                if (check.findings.length > 0) {
+                  commentBody += `**Issues found:**\n`;
+                  for (const finding of check.findings) {
+                    commentBody += `- \`${finding.file}\`${finding.line ? `:${finding.line}` : ''} - ${finding.message}\n`;
+                  }
+                  commentBody += `\n`;
+                }
+                if (check.recommendation) {
+                  commentBody += `**Recommendation:** ${check.recommendation}\n\n`;
+                }
+              }
             }
-
-            const body = fs.readFileSync(markdownPath, 'utf8');
-
+            
+            // Passed checks summary
+            if (report.passed_checks.length > 0) {
+              commentBody += `### ✅ Passed Checks (${report.passed_checks.length})\n\n`;
+              commentBody += `<details>\n<summary>Click to expand</summary>\n\n`;
+              for (const check of report.passed_checks) {
+                commentBody += `- ${check.id}: ${check.name}\n`;
+              }
+              commentBody += `\n</details>\n\n`;
+            }
+            
+            // Footer
+            commentBody += `---\n`;
+            commentBody += `⚠️ **This check is mandatory and cannot be bypassed without Architecture Board approval.**\n\n`;
+            commentBody += `📋 See [R1-R20 Resilience Checklist](../blob/main/docs/R1-R20-RESILIENCE-CHECKLIST.md) for details.\n`;
+            commentBody += `🔗 Repository: vessel-operations-service\n`;
+            
+            // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
-
-            const existing = comments.find(comment =>
-              comment.user.type === 'Bot' &&
-              comment.body.includes('Bob Resilience Guardian Analysis v3.0')
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('R1-R20 Resilience Guardrail Check')
             );
-
-            if (existing) {
+            
+            if (botComment) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: existing.id,
-                body
+                comment_id: botComment.id,
+                body: commentBody
               });
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body
+                body: commentBody
               });
             }
-
-      - name: Upload Bob artifacts
-        if: always() && steps.package_bundle.outcome == 'success'
+      
+      - name: Check for critical failures
+        if: always()
+        run: |
+          if [ -f resilience-report.json ]; then
+            STATUS=$(jq -r '.overall_status' resilience-report.json)
+            if [ "$STATUS" = "FAIL" ]; then
+              echo "❌ R1-R20 Resilience check FAILED"
+              echo "Critical resilience patterns are missing or incorrectly implemented."
+              echo "This PR cannot be merged until all CRITICAL issues are resolved."
+              exit 1
+            else
+              echo "✅ R1-R20 Resilience check PASSED"
+            fi
+          else
+            echo "⚠️ Resilience report not found"
+            exit 1
+          fi
+      
+      - name: Generate badge
+        if: always()
+        run: |
+          if [ -f resilience-report.json ]; then
+            STATUS=$(jq -r '.overall_status' resilience-report.json)
+            if [ "$STATUS" = "PASS" ]; then
+              echo "![Resilience Check](https://img.shields.io/badge/R1--R20-PASS-success)" > resilience-badge.md
+            else
+              echo "![Resilience Check](https://img.shields.io/badge/R1--R20-FAIL-critical)" > resilience-badge.md
+            fi
+          fi
+      
+      - name: Upload badge
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bob-resilience-analysis-v3
-          path: |
-            .github/artifacts/bob-pr-review-bundle.json
-            .github/artifacts/bob-review.md
-            .github/artifacts/bob-review.json
-            .github/artifacts/llama-job-status.json
-            .github/artifacts/changed-files-filtered.txt
-            .github/artifacts/pull-request.diff
+          name: resilience-badge
+          path: resilience-badge.md
           retention-days: 30
+
+  notify-architecture-board:
+    name: Notify Architecture Board on Bypass Attempt
+    runs-on: ubuntu-latest
+    needs: resilience-check
+    if: failure() && contains(github.event.pull_request.labels.*.name, 'bypass-resilience-check')
+    steps:
+      - name: Send notification
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue_body = `## ⚠️ Resilience Check Bypass Attempt
+            
+            A pull request has been labeled to bypass the R1-R20 Resilience Check.
+            
+            **Repository:** vessel-operations-service
+            **PR:** #${{ github.event.pull_request.number }}
+            **Title:** ${{ github.event.pull_request.title }}
+            **Author:** @${{ github.event.pull_request.user.login }}
+            **Branch:** ${{ github.head_ref }}
+            **Base Branch:** ${{ github.base_ref }}
+            
+            **Action Required:**
+            - Review the PR for legitimate bypass reasons
+            - Create an ADR documenting the exception
+            - Approve or reject the bypass request
+            - Verify compliance with security and governance policies
+            
+            **GitHub Context:**
+            - This is an automated notification
+            - Bypass requests require Architecture Board approval
+            - All exceptions must be documented in ADR format
+            
+            This notification is automated and cannot be disabled.`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Architecture Board] Resilience Check Bypass Request - PR #${{ github.event.pull_request.number }}`,
+              body: issue_body,
+              labels: ['architecture-board', 'resilience-bypass-request', 'governance']
+            });
 
 # Made with Bob
