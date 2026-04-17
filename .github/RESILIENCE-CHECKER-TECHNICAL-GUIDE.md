@@ -468,7 +468,7 @@ else:
 
 ### R5: Rate Limiting
 
-**Severity:** HIGH  
+**Severity:** HIGH
 **Category:** Resource Protection
 
 **Detection Logic:**
@@ -483,14 +483,39 @@ patterns = [
     r'throttle',                  # Throttling
 ]
 
+# Phase 2: Check if file has API endpoints
+endpoint_patterns = [
+    r'@RestController',           # Spring REST controller
+    r'@Controller',               # Spring controller
+    r'@RequestMapping',           # Request mapping
+    r'@GetMapping',               # GET endpoint
+    r'@PostMapping',              # POST endpoint
+    r'@PutMapping',               # PUT endpoint
+    r'@DeleteMapping',            # DELETE endpoint
+    r'@PatchMapping',             # PATCH endpoint
+    r'app\.get\(',                # Express.js GET
+    r'app\.post\(',               # Express.js POST
+    r'router\.',                  # Router endpoints
+    r'@Path\(',                   # JAX-RS path
+    r'@Route\(',                  # Generic route
+]
+
 # Decision
 if has_rate_limiting:
-    return PASS
+    return PASS  # Rate limiting configured
+elif has_endpoints:
+    add_finding(file_path, "API endpoints detected without rate limiting protection")
+    return FAIL  # Endpoints need rate limiting
 else:
-    return PASS  # Optional pattern, doesn't fail
+    return PASS  # No endpoints, not applicable
 ```
 
-**Note:** Rate limiting is recommended but not mandatory for all services.
+**Note:** This check now properly identifies files with API endpoints that lack rate limiting protection. It only fails when endpoints are detected without rate limiting, making violations actionable and specific.
+
+**Fixed Issues:**
+- Now reports specific files missing rate limiting
+- Correctly accumulates violations across multiple files
+- Only flags files with actual API endpoints
 
 ---
 

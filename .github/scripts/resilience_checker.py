@@ -283,8 +283,38 @@ class RateLimitingCheck(ResilienceCheck):
             r'throttle'
         ]
         
-        self.passed = any(re.search(p, content, re.IGNORECASE) for p in patterns)
-        return self.passed
+        has_rate_limiting = any(re.search(p, content, re.IGNORECASE) for p in patterns)
+        
+        if has_rate_limiting:
+            # Found rate limiting in this file - don't change overall pass status
+            return True
+        
+        # Check if file contains endpoints/controllers that should have rate limiting
+        endpoint_patterns = [
+            r'@RestController',
+            r'@Controller',
+            r'@RequestMapping',
+            r'@GetMapping',
+            r'@PostMapping',
+            r'@PutMapping',
+            r'@DeleteMapping',
+            r'@PatchMapping',
+            r'app\.get\(',
+            r'app\.post\(',
+            r'router\.',
+            r'@Path\(',
+            r'@Route\('
+        ]
+        
+        has_endpoints = any(re.search(p, content, re.IGNORECASE) for p in endpoint_patterns)
+        
+        if has_endpoints:
+            self.add_finding(file_path, "API endpoints detected without rate limiting protection")
+            self.passed = False  # Mark check as failed
+            return False
+        
+        # If no endpoints in this file, it's not relevant for rate limiting check
+        return True
 
 
 class HealthCheckCheck(ResilienceCheck):
