@@ -329,6 +329,6 @@ The checker is most effective when combined with these other validation layers.
 ---
 
 **Related Documentation:**
-- [R1-R23 Resilience Checklist](.github/R1-R20-RESILIENCE-CHECKLIST.md)
-- [Setup Guide](.github/SETUP-GUIDE.md)
-- [Technical Guide](.github/RESILIENCE-CHECKER-TECHNICAL-GUIDE.md)
+- [R1-R23 Resilience Checklist](R1-R20-RESILIENCE-CHECKLIST.md)
+- [Setup Guide](SETUP-GUIDE.md)
+- [Technical Guide](RESILIENCE-CHECKER-TECHNICAL-GUIDE.md)

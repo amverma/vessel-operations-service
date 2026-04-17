@@ -157,6 +157,7 @@ The extended R1-R23 checker now provides:
 - **Setup Guide:** `.github/SETUP-GUIDE.md`
 - **Checklist:** `.github/R1-R20-RESILIENCE-CHECKLIST.md` (covers R1-R23)
 - **Technical Guide:** `.github/RESILIENCE-CHECKER-TECHNICAL-GUIDE.md`
+- **Capabilities & Limitations:** `.github/RESILIENCE-CHECKER-CAPABILITIES.md`
 - **Workflow:** `.github/workflows/resiliencecheck.yml`
 
 ---
