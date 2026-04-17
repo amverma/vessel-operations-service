@@ -31,6 +31,7 @@ class ResilienceCheck:
         self.severity = severity
         self.description = description
         self.findings: List[Dict[str, Any]] = []
+        self.passed_evidence: List[Dict[str, Any]] = []
         self.passed = False
         self.recommendation = ""
     
@@ -39,8 +40,16 @@ class ResilienceCheck:
         raise NotImplementedError
     
     def add_finding(self, file: str, message: str, line: Optional[int] = None):
-        """Add a finding to this check"""
+        """Add a finding (violation) to this check"""
         self.findings.append({
+            "file": file,
+            "line": line,
+            "message": message
+        })
+    
+    def add_passed_evidence(self, file: str, message: str, line: Optional[int] = None):
+        """Add evidence of compliance (why check passed for this file)"""
+        self.passed_evidence.append({
             "file": file,
             "line": line,
             "message": message
@@ -48,7 +57,7 @@ class ResilienceCheck:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert check to dictionary"""
-        return {
+        result = {
             "id": self.check_id,
             "name": self.name,
             "category": self.category,
@@ -58,6 +67,12 @@ class ResilienceCheck:
             "findings": self.findings,
             "recommendation": self.recommendation
         }
+        
+        # Only include passed_evidence if there is any
+        if self.passed_evidence:
+            result["passed_evidence"] = self.passed_evidence
+        
+        return result
 
 
 class CircuitBreakerCheck(ResilienceCheck):
@@ -283,10 +298,19 @@ class RateLimitingCheck(ResilienceCheck):
             r'throttle'
         ]
         
-        has_rate_limiting = any(re.search(p, content, re.IGNORECASE) for p in patterns)
+        # Find which pattern matched (if any)
+        matched_pattern = None
+        for pattern in patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                matched_pattern = pattern
+                break
         
-        if has_rate_limiting:
-            # Found rate limiting in this file - don't change overall pass status
+        if matched_pattern:
+            # Found rate limiting in this file
+            self.add_passed_evidence(
+                file_path,
+                f"Rate limiting configured (found pattern: {matched_pattern})"
+            )
             return True
         
         # Check if file contains endpoints/controllers that should have rate limiting
