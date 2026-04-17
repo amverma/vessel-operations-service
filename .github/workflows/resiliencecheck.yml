@@ -151,7 +151,19 @@ jobs:
               commentBody += `### ✅ Passed Checks (${report.passed_checks.length})\n\n`;
               commentBody += `<details>\n<summary>Click to expand</summary>\n\n`;
               for (const check of report.passed_checks) {
-                commentBody += `- ${check.id}: ${check.name}\n`;
+                commentBody += `#### ${check.id}: ${check.name}\n`;
+                commentBody += `**Category:** ${check.category}\n\n`;
+                
+                // Show passed evidence if available
+                if (check.passed_evidence && check.passed_evidence.length > 0) {
+                  commentBody += `**Evidence of compliance:**\n`;
+                  for (const evidence of check.passed_evidence) {
+                    commentBody += `- \`${evidence.file}\`${evidence.line ? `:${evidence.line}` : ''} - ${evidence.message}\n`;
+                  }
+                  commentBody += `\n`;
+                } else {
+                  commentBody += `*No specific files flagged - pattern not applicable or found globally*\n\n`;
+                }
               }
               commentBody += `\n</details>\n\n`;
             }
