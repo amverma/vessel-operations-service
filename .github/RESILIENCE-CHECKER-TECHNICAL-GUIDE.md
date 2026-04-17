@@ -110,7 +110,7 @@ ResilienceCheck (Base Class)
 4. CHECK EXECUTION
    ├─ For each file:
    │  ├─ Read file content
-   │  └─ Run ALL 20 checks against content
+   │  └─ Run ALL 23 checks against content
    │
    └─ Each check:
       ├─ Phase 1: Look for pattern implementation
