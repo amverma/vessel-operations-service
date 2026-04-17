@@ -415,34 +415,54 @@ Without timeouts, threads can hang indefinitely, leading to:
 
 ### R4: Bulkhead Pattern
 
-**Severity:** HIGH  
+**Severity:** HIGH
 **Category:** Resource Isolation
 
 **Detection Logic:**
 
 ```python
-# Phase 1: Look for bulkhead implementation
-patterns = [
-    r'@Bulkhead',                 # Resilience4j annotation
-    r'BulkheadConfig',            # Configuration class
-    r'ThreadPoolTaskExecutor',    # Spring thread pool
-    r'thread-pool:',              # YAML config
-    r'bulkhead:',                 # Bulkhead config
+# Phase 1: Check if bulkhead pattern exists
+bulkhead_patterns = [
+    r'@Bulkhead',                          # Resilience4j annotation
+    r'BulkheadConfig',                     # Configuration class
+    r'ThreadPoolTaskExecutor',             # Spring thread pool
+    r'thread-pool:',                       # YAML config
+    r'bulkhead:',                          # Bulkhead config
+    r'io\.github\.resilience4j\.bulkhead'  # Resilience4j import
 ]
 
-# Decision
 if has_bulkhead:
     return PASS
+
+# Phase 2: Check if bulkhead is NEEDED (concurrent/async operations)
+concurrent_operation_patterns = [
+    r'@Async',                             # Spring async methods
+    r'CompletableFuture',                  # Async operations
+    r'ExecutorService',                    # Thread pool usage
+    r'ThreadPoolExecutor',                 # Custom thread pools
+    r'@Scheduled',                         # Scheduled tasks
+    r'parallel\(\)',                       # Parallel streams
+    r'parallelStream\(\)',                 # Parallel stream operations
+    r'kafkaTemplate\.send',                # Async Kafka operations
+    r'@KafkaListener.*concurrency'         # Concurrent Kafka consumers
+]
+
+needs_bulkhead = any(pattern found in content)
+
+# Decision
+if needs_bulkhead and not has_bulkhead:
+    return FAIL  # Flag: concurrent operations without bulkhead
 else:
-    # Bulkhead is recommended but not always required
-    # Only flag if file is a service class
-    if is_service_class(file_path):
-        return FAIL
-    else:
-        return PASS
+    return PASS  # No concurrent operations, bulkhead not needed
 ```
 
-**Note:** This check is more lenient as bulkheads are not always necessary for every service.
+**Key Improvements:**
+- **Context-Aware:** Only flags files with concurrent/async operations
+- **Follows Established Pattern:** Consistent with Circuit Breaker, Retry, and Timeout checks
+- **Zero False Positives:** DTOs, domain models, and simple controllers are not flagged
+- **Actionable Findings:** Clear message when bulkhead is actually needed
+
+**Note:** This check follows the same smart pattern as other resilience checks - it only flags files where the pattern is needed but missing, not every file in the project.
 
 ---
 

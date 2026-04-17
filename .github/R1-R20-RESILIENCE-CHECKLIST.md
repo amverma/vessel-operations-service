@@ -107,11 +107,17 @@ Configure connection-timeout, read-timeout, and write-timeout for all external c
 ## Resource Management Patterns
 
 ### R4: Bulkhead Pattern
-**Severity:** HIGH  
+**Severity:** HIGH
 **Category:** Resource Isolation
 
-**Description:**  
+**Description:**
 Isolate resources to prevent resource exhaustion from affecting the entire system. Use separate thread pools for different operations.
+
+**When Required:**
+- Files with `@Async` methods or `CompletableFuture` operations
+- Files using `ExecutorService` or custom thread pools
+- Files with `@Scheduled` tasks or parallel stream operations
+- Kafka operations with concurrent consumers or async publishing
 
 **Implementation:**
 - Use `@Bulkhead` annotation to limit concurrent calls
@@ -126,7 +132,10 @@ public CompletableFuture<Data> callExternalService() {
 }
 ```
 
-**Recommendation:**  
+**Checker Behavior:**
+The resilience checker only flags files that contain concurrent/async operations without bulkhead protection. Simple controllers, DTOs, and domain models are not flagged.
+
+**Recommendation:**
 Configure @Bulkhead annotation or separate thread pools for different operations.
 
 ---

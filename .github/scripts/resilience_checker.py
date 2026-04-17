@@ -216,20 +216,49 @@ class BulkheadCheck(ResilienceCheck):
         self.recommendation = "Configure @Bulkhead annotation or separate thread pools for different operations."
     
     def check(self, file_path: str, content: str) -> bool:
-        patterns = [
+        # Check if bulkhead pattern exists
+        bulkhead_patterns = [
             r'@Bulkhead',
             r'BulkheadConfig',
             r'ThreadPoolTaskExecutor',
             r'thread-pool:',
-            r'bulkhead:'
+            r'bulkhead:',
+            r'io\.github\.resilience4j\.bulkhead'
         ]
         
-        self.passed = any(re.search(p, content, re.IGNORECASE) for p in patterns)
+        has_bulkhead = any(re.search(p, content, re.IGNORECASE) for p in bulkhead_patterns)
         
-        if not self.passed and file_path.endswith(('.java', '.kt', '.yml', '.yaml')):
-            self.add_finding(file_path, "Consider implementing bulkhead pattern for resource isolation")
+        if has_bulkhead:
+            self.passed = True
+            return True
         
-        return self.passed
+        # Check if bulkhead is needed (concurrent/async operations)
+        concurrent_operation_patterns = [
+            r'@Async',
+            r'CompletableFuture',
+            r'ExecutorService',
+            r'ThreadPoolExecutor',
+            r'@Scheduled',
+            r'parallel\(\)',
+            r'parallelStream\(\)',
+            r'kafkaTemplate\.send',  # Async Kafka operations
+            r'@KafkaListener.*concurrency'  # Concurrent Kafka consumers
+        ]
+        
+        needs_bulkhead = any(re.search(p, content) for p in concurrent_operation_patterns)
+        
+        # Only flag if needed but missing
+        if needs_bulkhead:
+            self.add_finding(
+                file_path,
+                "Concurrent/async operations detected without bulkhead protection for resource isolation"
+            )
+            self.passed = False
+            return False
+        
+        # Pass by default if bulkhead not needed
+        self.passed = True
+        return True
 
 
 class RateLimitingCheck(ResilienceCheck):

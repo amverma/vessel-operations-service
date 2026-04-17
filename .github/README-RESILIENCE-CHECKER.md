@@ -16,7 +16,7 @@ The checker validates 20 critical resilience patterns across multiple categories
 - **R3**: Timeout Configuration - Prevents indefinite waits
 
 ### Resource Management (R4-R5, R15-R16)
-- **R4**: Bulkhead Pattern - Isolates resources
+- **R4**: Bulkhead Pattern - Isolates resources (only flags files with concurrent/async operations)
 - **R5**: Rate Limiting - Protects from overload
 - **R15**: Database Connection Pooling - Efficient resource usage
 - **R16**: Kubernetes Resource Limits - Prevents resource exhaustion
